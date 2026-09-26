@@ -763,18 +763,38 @@ def method_section(ctx: dict) -> None:
     d = ctx["discoveries"]
     if not d.empty and d.creator_key.str.startswith("web:").any():
         wo = d[d.creator_key.str.startswith("web:")]
-        g = wo.groupby("creator_key").agg(
-            Creator=("handle", "first"), Platforms=("platform", lambda x: ", ".join(sorted(set(x)))),
-            Mentions=("url", "count"), Evidence=("evidence", "first"), Source=("url", "first"))
-        ig = {r["handle"].lower(): r["followers"] for r in db.query(
-            "SELECT handle, followers FROM platform_accounts WHERE platform='instagram' AND followers IS NOT NULL")}
-        if ig:
-            ig_handle = wo[wo.platform == "instagram"].groupby("creator_key")["handle"].first()
-            g["Instagram followers"] = [ig.get(str(ig_handle.get(k, "")).lower()) for k in g.index]
-        with st.expander(f"Found on web & social, no YouTube match ({len(g)}) — not ranked"):
-            st.caption("No YouTube metrics available — review manually.")
-            st.dataframe(g.sort_values("Mentions", ascending=False), hide_index=True, width="stretch",
-                         column_config={"Source": st.column_config.LinkColumn()})
+        ig_acc = {r["handle"].lower(): r for r in db.query(
+            "SELECT * FROM platform_accounts WHERE platform='instagram' AND followers IS NOT NULL")}
+        ig_handle = wo[wo.platform == "instagram"].groupby("creator_key")["handle"].first()
+        verified = {k: ig_acc[str(h).lower()] for k, h in ig_handle.items() if str(h).lower() in ig_acc}
+        if verified:  # found on the web, numbers confirmed by the Instagram Graph API
+            rows = []
+            for k, a in verified.items():
+                raw = json.loads(a.get("raw_json") or "{}")
+                first = wo[wo.creator_key == k].iloc[0]
+                rows.append({"Creator": raw.get("name") or a["handle"], "Followers": a["followers"],
+                             "Engagement": raw.get("engagement_rate"), "Median likes": raw.get("median_likes"),
+                             "Posts (30 days)": raw.get("posts_last_30d"),
+                             "Last post": (raw.get("last_post_at") or "")[:10] or None,
+                             "Found via": first["query"], "Instagram": a["url"]})
+            g = pd.DataFrame(rows).sort_values("Followers", ascending=False, na_position="last")
+            with st.expander(f"Instagram creators, no YouTube match ({len(g)}) — not ranked"):
+                st.caption("Found by web search, numbers from the official Instagram API (latest posts). No YouTube "
+                           "videos or comments to analyse — review manually. Sorted by followers, not a ranking.")
+                st.dataframe(g, hide_index=True, width="stretch", column_config={
+                    "Instagram": st.column_config.LinkColumn(display_text="Open"),
+                    "Followers": st.column_config.NumberColumn(format="%d"),
+                    "Engagement": st.column_config.NumberColumn(format="percent"),
+                    "Median likes": st.column_config.NumberColumn(format="%d")})
+        rest = wo[~wo.creator_key.isin(verified)]
+        if not rest.empty:
+            g = rest.groupby("creator_key").agg(
+                Creator=("handle", "first"), Platforms=("platform", lambda x: ", ".join(sorted(set(x)))),
+                Mentions=("url", "count"), Evidence=("evidence", "first"), Source=("url", "first"))
+            with st.expander(f"Found on web & social, no YouTube match ({len(g)}) — not ranked"):
+                st.caption("No verified metrics available — review manually.")
+                st.dataframe(g.sort_values("Mentions", ascending=False), hide_index=True, width="stretch",
+                             column_config={"Source": st.column_config.LinkColumn()})
     if not d.empty and d.creator_key.str.startswith("twitch:").any():
         tw = d[d.creator_key.str.startswith("twitch:")].drop_duplicates("creator_key")
         acc = {r["handle"].lower(): r for r in db.query("SELECT * FROM platform_accounts WHERE platform='twitch'")}
