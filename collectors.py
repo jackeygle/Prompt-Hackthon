@@ -1,4 +1,4 @@
-"""Platform collector interface. YouTube is the only deep collector in the MVP.
+"""Platform collector interface. YouTube is the deep collector; Twitch adds discovery + channel metrics.
 
 Other platforms declare what they can do; missing capabilities lower confidence instead of failing.
 """
@@ -25,6 +25,13 @@ class YouTubeCollector:
     """Implemented functionally in youtube.py / pipeline.py."""
     platform = "youtube"
     capabilities = Capability.DISCOVER | Capability.PROFILE_STATS | Capability.CONTENT | Capability.COMMENTS
+    source_reliability = 1.0
+
+
+class TwitchCollector:
+    """Twitch Helix (twitch.py): discovery via live streams / channel search, follower totals, VOD views."""
+    platform = "twitch"
+    capabilities = Capability.DISCOVER | Capability.PROFILE_STATS | Capability.CONTENT
     source_reliability = 1.0
 
 

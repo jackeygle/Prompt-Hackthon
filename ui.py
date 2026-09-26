@@ -686,10 +686,13 @@ def platform_icon(platform: str, size: int = 14) -> str:
     return f'<svg class="pn-ico" width="{size}" height="{size}" viewBox="0 0 24 24" aria-hidden="true">{body}</svg>'
 
 
-def platform_chip(platform: str, handle: str) -> str:
+def platform_chip(platform: str, handle: str, followers: int | None = None) -> str:
     name = PLATFORM_NAME.get(platform.lower(), platform)
-    return (f'<span class="pn-chip pn-pchip" title="{esc(name)}">{platform_icon(platform)}'
-            f'<span>@{esc(handle)}</span></span>')
+    count = (f'<b class="pn-num" style="margin-left:4px">{fmt_count(followers)}</b>'
+             if followers is not None else "")
+    tip = f"{name} · {followers:,} followers (official API)" if followers is not None else name
+    return (f'<span class="pn-chip pn-pchip" title="{esc(tip)}">{platform_icon(platform)}'
+            f'<span>@{esc(handle)}</span>{count}</span>')
 
 
 def icon(name: str, size: int = 12) -> str:

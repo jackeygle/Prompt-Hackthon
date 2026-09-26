@@ -15,6 +15,8 @@ AZURE_OPENAI_ENDPOINT = os.getenv("AZURE_OPENAI_ENDPOINT", "")
 AZURE_OPENAI_API_KEY = os.getenv("AZURE_OPENAI_API_KEY", "")
 AZURE_OPENAI_DEPLOYMENT = os.getenv("AZURE_OPENAI_DEPLOYMENT", "")
 TAVILY_API_KEY = os.getenv("TAVILY_API_KEY", "")
+TWITCH_CLIENT_ID = os.getenv("TWITCH_CLIENT_ID", "")
+TWITCH_CLIENT_SECRET = os.getenv("TWITCH_CLIENT_SECRET", "")
 
 DB_PATH = Path(os.getenv("DB_PATH", ROOT / "data" / "creator_intel.db"))
 
@@ -64,9 +66,14 @@ ASSUMED_CPM_EUR = 20.0      # ASSUMED CPM for the cost proxy. Not a creator quot
 WEB_DISCOVERY_ENABLED = os.getenv("WEB_DISCOVERY_ENABLED", "1") == "1"
 TAVILY_MAX_QUERIES = 6
 TAVILY_RESULTS_PER_QUERY = 10
-MAX_WEB_HANDLE_LOOKUPS = 15  # channels.list forHandle lookups (1 quota unit each)
+MAX_WEB_HANDLE_LOOKUPS = 25  # channels.list forHandle lookups (1 quota unit each)
 
 # Visual analysis (VLM) on official YouTube thumbnails
 VLM_ENABLED = os.getenv("VLM_ENABLED", "1") == "1"
 VLM_IMAGES_PER_CREATOR = 4
 MIN_CRITERION_COVERAGE = 0.5  # criteria known for fewer candidates than this are dropped from TOPSIS
+
+# Twitch (Helix, free app token): live-stream discovery in the target language + channel metrics
+TWITCH_ENABLED = os.getenv("TWITCH_ENABLED", "1") == "1"
+TWITCH_TOP_GAMES = 20       # top categories added to the audience-interest categories
+TWITCH_MAX_PROFILES = 30    # channels enriched (users + followers + VODs: ~3 calls each)

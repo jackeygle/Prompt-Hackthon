@@ -197,6 +197,8 @@ def build_context(campaign: dict) -> dict:
         yt_row = acc[acc.platform == "youtube"].iloc[0] if not acc.empty and (acc.platform == "youtube").any() else None
         raw = json.loads(yt_row["raw_json"]) if yt_row is not None and yt_row["raw_json"] else {}
         others = {p: h for p, h in zip(acc.platform, acc.handle) if p != "youtube"} if not acc.empty else {}
+        other_followers = ({p: int(n) for p, n in zip(acc.platform, acc.followers) if p != "youtube" and pd.notna(n)}
+                           if not acc.empty else {})
         d = discoveries[discoveries.creator_key == c] if not discoveries.empty else pd.DataFrame()
         web_platforms = sorted(set(d[d.source == "tavily_web"].platform)) if not d.empty else []
         def absolute(names, scale):
@@ -222,7 +224,7 @@ def build_context(campaign: dict) -> dict:
             "avatar": raw.get("thumbnail"), "url": yt_row["url"] if yt_row is not None else None,
             "niche": meta(c).get("niche_label", ""), "summary": meta(c).get("summary", ""),
             "videos": meta(c).get("videos", []), "groups": groups, "reasons": good, "gaps": gaps,
-            "others": others, "web_platforms": web_platforms, "features": f,
+            "others": others, "other_followers": other_followers, "web_platforms": web_platforms, "features": f,
         }
     # Hidden gem: derived from existing numbers only (rule shown in the badge tooltip)
     subs = [v["subs"] for v in vms.values() if v["subs"]]
@@ -563,6 +565,9 @@ def creator_card(vm: dict, ctx: dict, shortlisted: bool) -> None:
                          hint=f"Per video: median views × assumed €{config.ASSUMED_CPM_EUR:.0f} CPM, not a quote"),
         ])
         reason = ui.reasons_list(vm["reasons"][:1]) if vm["reasons"] else ""
+        tw = vm["other_followers"].get("twitch")
+        if tw is not None:  # also streams on Twitch: real follower total from the Twitch API
+            badges += " " + ui.platform_chip("twitch", vm["others"]["twitch"], tw)
         html(f'<div class="pn-card-head">{ui.avatar(vm["name"], vm["avatar"])}<div class="who">'
              f'<div class="pn-rank" title="YouTube">#{vm["rank"]} {ui.platform_icon("youtube", 13)}'
              f'{esc(loc)}</div>'
@@ -765,6 +770,25 @@ def method_section(ctx: dict) -> None:
             st.caption("No YouTube metrics available — review manually.")
             st.dataframe(g.sort_values("Mentions", ascending=False), hide_index=True, width="stretch",
                          column_config={"Source": st.column_config.LinkColumn()})
+    if not d.empty and d.creator_key.str.startswith("twitch:").any():
+        tw = d[d.creator_key.str.startswith("twitch:")].drop_duplicates("creator_key")
+        acc = {r["handle"].lower(): r for r in db.query("SELECT * FROM platform_accounts WHERE platform='twitch'")}
+        rows = []
+        for _, r in tw.iterrows():
+            a = acc.get(r["handle"].lower(), {})
+            raw = json.loads(a.get("raw_json") or "{}")
+            rows.append({"Streamer": raw.get("name") or r["handle"], "Followers": a.get("followers"),
+                         "Main category": raw.get("game"), "Median VOD views": raw.get("median_vod_views"),
+                         "Last stream": (raw.get("last_stream_at") or "")[:10] or None,
+                         "Found via": r["query"], "Twitch": r["url"]})
+        g = pd.DataFrame(rows).sort_values("Followers", ascending=False, na_position="last")
+        with st.expander(f"Twitch streamers, no YouTube match ({len(g)}) — not ranked"):
+            st.caption("Real metrics from the official Twitch API, but no YouTube videos or comments to analyse — "
+                       "review manually. Sorted by followers, not a ranking.")
+            st.dataframe(g, hide_index=True, width="stretch", column_config={
+                "Twitch": st.column_config.LinkColumn(display_text="Open"),
+                "Followers": st.column_config.NumberColumn(format="%d"),
+                "Median VOD views": st.column_config.NumberColumn(format="%d")})
     if ctx["run_stats"]:
         with st.expander("Run statistics (external API usage)"):
             st.json(ctx["run_stats"])
@@ -801,7 +825,7 @@ def analysis_page(ctx: dict, cid: str, short: list[str]) -> None:
         left, mid, right = st.columns([3.2, 1.2, 1.4], vertical_alignment="center")
         with left:
             loc = COUNTRY.get(vm["country"], vm["country"]) if vm["country"] else ""
-            links = "".join(ui.platform_chip(p, h) for p, h in vm["others"].items())
+            links = "".join(ui.platform_chip(p, h, vm["other_followers"].get(p)) for p, h in vm["others"].items())
             name = f'<a href="{esc(vm["url"])}" target="_blank" style="text-decoration:none">{esc(vm["name"])}</a>' \
                 if vm["url"] else esc(vm["name"])
             html(f'<div class="pn-card-head">{ui.avatar(vm["name"], vm["avatar"], large=True)}<div class="who">'

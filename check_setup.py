@@ -2,7 +2,7 @@
 
     python check_setup.py
 
-Cost: ~2 YouTube quota units, 1 Tavily credit, 1 tiny Groq call, 1 tiny OpenAI vision call.
+Cost: ~2 YouTube quota units, 1 Tavily credit, 3 free Twitch calls, 1 tiny Groq call, 1 tiny OpenAI vision call.
 """
 import os
 import sys
@@ -22,7 +22,8 @@ def report(name, status, msg):
 
 def check_env():
     for var, required in [("YOUTUBE_API_KEY", True), ("GROQ_API_KEY", True), ("TAVILY_API_KEY", False),
-                          ("OPENAI_API_KEY", False), ("GEMINI_API_KEY", False)]:
+                          ("OPENAI_API_KEY", False), ("GEMINI_API_KEY", False),
+                          ("TWITCH_CLIENT_ID", False), ("TWITCH_CLIENT_SECRET", False)]:
         if os.getenv(var):
             report(var, OK, "set")
         else:
@@ -101,6 +102,22 @@ def check_tavily():
         report("Tavily search", FAIL, str(e)[:160])
 
 
+def check_twitch():
+    import twitch
+    if not twitch.available():
+        return
+    try:
+        streams = twitch.live_streams("de", [g["id"] for g in twitch.top_games(5)], pages=1)
+        followers = twitch.follower_total(streams[0]["user_id"]) if streams else None
+        report("Twitch Helix", OK, f"{len(streams)} live German streams in top games"
+               + (f", e.g. {streams[0]['user_name']} ({followers:,} followers)" if streams and followers is not None
+                  else ""))
+        if streams and followers is None:
+            report("Twitch followers", WARN, "follower totals unavailable with an app token → shown as '–'")
+    except Exception as e:
+        report("Twitch Helix", FAIL, str(e)[:160])
+
+
 def check_transcripts():
     import youtube as yt
     yt.TranscriptStatus.reset()
@@ -121,6 +138,7 @@ if __name__ == "__main__":
     check_chain("OpenAI", "https://api.openai.com/v1", config.OPENAI_API_KEY, config.VLM_MODELS, "openai")
     check_llm_calls()
     check_tavily()
+    check_twitch()
     check_transcripts()
     print("\nResult:", "ready for a full run" if FAIL not in results else "fix the ❌ items first")
     sys.exit(1 if FAIL in results else 0)

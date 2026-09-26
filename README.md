@@ -1,6 +1,6 @@
 # Creator Intelligence Engine (hackathon MVP)
 
-Campaign brief → Groq structured extraction → **human review/edit** → YouTube + Tavily web discovery →
+Campaign brief → Groq structured extraction → **human review/edit** → YouTube + Tavily web + Twitch discovery →
 identity merge → YouTube data collection → text / comment / thumbnail (VLM) features → hard filter →
 **AHP + TOPSIS** → explainable Streamlit dashboard.
 
@@ -12,7 +12,7 @@ reported next to a separate **Data Confidence** score.
 
 ```bash
 pip install -r requirements.txt
-cp .env.example .env        # YOUTUBE_API_KEY + GROQ_API_KEY required; TAVILY/OPENAI/GEMINI optional
+cp .env.example .env        # YOUTUBE_API_KEY + GROQ_API_KEY required; TAVILY/OPENAI/GEMINI/TWITCH optional
 streamlit run app.py        # Campaign → Continue → confirm details → Find creators → Discover → View analysis
                             # → Shortlist.
 # or headless:
@@ -29,6 +29,7 @@ python check_setup.py      # one tiny request per API: shows exactly which keys/
 | Campaign settings (review / edit) | `app.campaign_form` | – | market, language, price, audience + interests, goal, subscriber range, **creators to analyse (5/10/20/50, default 10)**, searches, seeds |
 | YouTube search (market / language, last 12 months) | `youtube.py` | YouTube | 100 quota units per query |
 | Web discovery | `web_discovery.discover` | Tavily + Groq | 6 basic searches (general + `site:` TikTok/Instagram/Twitch/YouTube); profile URLs parsed deterministically; 1 LLM call extracts creator names from articles (names must appear in the cited result) |
+| Twitch discovery | `twitch.discover` | Twitch Helix (free) | live streams in the target language in audience-interest categories + top games + Science & Technology; live channel search; Tavily-found Twitch handles verified. ≤30 profiles: follower total, main category, median VOD views, last stream; follower range from spec |
 | Identity merge / dedup | `web_discovery.resolve_to_youtube` | YouTube | handles/channel IDs/normalised names → YouTube channels (≤15 `forHandle` lookups); unmatched → *web-only* list (not ranked) |
 | Cheap filter | `pipeline.run_campaign` | – | subscriber range from spec, country in market if declared; screens max(20, 2×creators) channels (≤100) by search hits + 2×web mentions |
 | Upload screening | `features.relevant_video_ids` | Groq | 1 call per channel over its last 30 titles; a video counts if its viewers plausibly belong to the target audience (product/niche **or** the audience's interests, e.g. PC gaming, game performance, tech) |
@@ -67,6 +68,7 @@ Missing values are imputed with the unfavourable quartile and lower confidence; 
 |---|---|
 | `TAVILY_API_KEY` / Tavily down | YouTube-only discovery; error listed in run statistics |
 | `GROQ_API_KEY` / Groq down or rate-limited | falls back along `LLM_MODELS` (Gemini) |
+| `TWITCH_CLIENT_ID/SECRET` / Twitch down | no Twitch discovery or metrics; listed in run statistics |
 | `OPENAI_API_KEY` / OpenAI down | no visual features; visual criterion dropped/imputed; confidence −0.05 |
 | Transcript blocked / missing | title + description only; transcript coverage lowers confidence |
 | Single API error | retried / that enrichment skipped for that creator; the run continues |
@@ -77,7 +79,11 @@ Missing values are imputed with the unfavourable quartile and lower confidence; 
 - Transcripts use the unofficial `youtube-transcript-api`; works from most home connections, usually blocked
   from cloud/datacenter IPs.
 - No video downloading / frame extraction (YouTube ToS); VLM sees official thumbnails only.
-- TikTok / Instagram / Twitch contribute discovery, handles and evidence only — no metrics, no scraping.
+- TikTok / Instagram contribute discovery, handles and evidence only — no metrics, no scraping.
+- Twitch: streamers are merged with their YouTube channel (YouTube link in the Twitch bio, or exact name match)
+  and ranked on their YouTube data; the Twitch follower total is shown on the card but never changes the score.
+  Streamers without a YouTube match are listed with real Twitch metrics, not ranked (no videos/comments to analyse).
+  Discovery uses streams that are live at run time, so results vary by time of day.
 - LLM cache keys are provider-independent: an identical prompt answered once is reused, whichever model answered.
 
 ## Switching LLM provider

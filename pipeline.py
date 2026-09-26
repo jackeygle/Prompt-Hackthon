@@ -1,4 +1,4 @@
-"""End-to-end pipeline: brief -> spec -> YouTube + web discovery -> identity merge -> cheap filter ->
+"""End-to-end pipeline: brief -> spec -> YouTube + web + Twitch discovery -> identity merge -> cheap filter ->
 collection -> text / comment / visual features -> hard filter -> AHP + TOPSIS.
 
 CLI:  python pipeline.py "Find creators for €600–900 refurbished gaming PCs targeting gamers in Germany"
@@ -18,10 +18,11 @@ import config
 import db
 import features as fx
 import ranking
+import twitch
 import vision
 import web_discovery as web
 import youtube as yt
-from collectors import LinkedAccountCollector, YouTubeCollector, extract_social_links
+from collectors import LinkedAccountCollector, TwitchCollector, YouTubeCollector, extract_social_links
 from llm import LLMClient
 from llm import dead_models as llm_dead_models
 from llm import missing_keys as llm_missing_keys
@@ -103,6 +104,7 @@ def run_campaign(brief: str, spec: CampaignSpec | None = None, seed_handles: lis
     yt.QuotaUsage.units = 0
     yt.TranscriptStatus.reset()
     web.TavilyUsage.calls = 0
+    twitch.TwitchUsage.calls = 0
     errors: list[str] = []
     campaign_id = "c_" + uuid.uuid4().hex[:8]
 
@@ -145,14 +147,26 @@ def run_campaign(brief: str, spec: CampaignSpec | None = None, seed_handles: lis
     # 2b. Web / cross-platform discovery (Tavily). Optional: failures leave YouTube-only discovery intact.
     web_matches: dict[str, list[dict]] = {}
     web_only: list[dict] = []
-    n_identities = 0
+    identities: list[dict] = []
     if config.WEB_DISCOVERY_ENABLED:
-        identities, werr = web.discover(spec, llm, lambda m, f: p(m, 0.14 + 0.05 * f))
+        identities, werr = web.discover(spec, llm, lambda m, f: p(m, 0.14 + 0.04 * f))
         errors += [f"Web discovery: {e}" for e in werr]
-        n_identities = len(identities)
-        if identities:
-            p("Merging web identities with YouTube channels", 0.19)
-            web_matches, web_only = web.resolve_to_youtube(identities, chans)
+    n_identities = len(identities)
+
+    # 2c. Twitch (optional): live streamers in the target language + verification of web-found Twitch handles
+    twitch_profiles: dict[str, dict] = {}
+    twitch_kept: set[str] = set()
+    if config.TWITCH_ENABLED and twitch.available():
+        web_tw = [i["handle"] for i in identities if i["platform"] == "twitch" and i["handle"]]
+        tw_ids, twitch_profiles, terr = twitch.discover(spec, web_tw, lambda m, f: p(m, 0.18 + 0.01 * f))
+        errors += [f"Twitch: {e}" for e in terr]
+        twitch_kept = {i["handle"].lower() for i in tw_ids if i["platform"] == "twitch"}
+        identities += tw_ids
+    if identities:
+        p("Merging web & Twitch identities with YouTube channels", 0.19)
+        web_matches, web_only = web.resolve_to_youtube(identities, chans)
+    # a web-only creator whose Twitch profile was verified is listed once, with metrics, under Twitch
+    web_only = [w for w in web_only if (w["profiles"].get("twitch") or "").lower() not in twitch_kept]
 
     # 3. Identity merge + cheap filter on channel metadata
     dach = {"DE", "AT", "CH"} if spec.target_country == "DE" else {spec.target_country}
@@ -278,8 +292,10 @@ def run_campaign(brief: str, spec: CampaignSpec | None = None, seed_handles: lis
         links = {k: (v, "description_link") for k, v in
                  extract_social_links(ch["snippet"].get("description", ""), *[v["description"] for v in top]).items()}
         for ident in web_matches.get(cid, []):
-            if ident["platform"] not in ("youtube", "unknown", "website") and ident["handle"]:
-                links.setdefault(ident["platform"], (ident["handle"], "tavily_web"))
+            if ident.get("twitch_login"):
+                links["twitch"] = (ident["twitch_login"], "twitch_api")  # YouTube link in the Twitch bio
+            elif ident["platform"] not in ("youtube", "unknown", "website") and ident["handle"]:
+                links.setdefault(ident["platform"], (ident["handle"], ident.get("source", "tavily_web")))
         results[cid] = {"features": f, "evidence": evidence, "summary": summary, "links": links,
                         "niche_label": relevance[cid].niche_label, "videos": [v["id"] for v in top],
                         "visual_tags": visual_tags}
@@ -296,6 +312,24 @@ def run_campaign(brief: str, spec: CampaignSpec | None = None, seed_handles: lis
             done += 1
             p(f"Deep analysis ({done}/{len(deep)})", 0.45 + 0.45 * done / max(len(deep), 1))
 
+    # streamers whose YouTube channel was not analysed in depth stay visible in the Twitch-only list
+    twitch_matched = {(i.get("twitch_login") or i["handle"] or "").lower() for cid in results
+                      for i in web_matches.get(cid, []) if i.get("source") == "twitch_api"}
+    twitch_only = [twitch_profiles[l] for l in sorted(twitch_kept - twitch_matched)]
+
+    # 5b. Twitch metrics for ranked creators with a Twitch account (descriptive; never changes the score)
+    tw_logins = {r["links"]["twitch"][0].lower() for r in results.values() if "twitch" in r["links"]}
+    missing = sorted(tw_logins - set(twitch_profiles))
+    if missing and config.TWITCH_ENABLED and twitch.available():
+        try:
+            twitch_profiles.update(twitch.profiles(missing))
+        except twitch.TwitchError as e:
+            errors.append(f"Twitch: {e}")
+    for r in results.values():
+        tp = twitch_profiles.get(r["links"].get("twitch", ("",))[0].lower())
+        if tp and tp.get("followers") is not None:
+            r["features"]["twitch_followers"] = tp["followers"]
+
     # 6. Persist creators, accounts, discoveries, features, evidence, visual tags
     p("Ranking", 0.92)
     for cid, r in results.items():
@@ -311,15 +345,19 @@ def run_campaign(brief: str, spec: CampaignSpec | None = None, seed_handles: lis
                     json.dumps({"thumbnail": (sn.get("thumbnails", {}).get("default") or {}).get("url"),
                                 "description": sn.get("description", "")[:500]}), db.now()))
         for plat, (handle, source) in r["links"].items():
-            db.execute("INSERT OR IGNORE INTO platform_accounts VALUES (?,?,?,?,?,?,?,?,?,?)",
-                       (f"{plat}:{handle.lower()}", creator_id, plat, handle, None, None, source,
-                        LinkedAccountCollector.source_reliability, None, db.now()))
+            tp = twitch_profiles.get(handle.lower()) if plat == "twitch" else None
+            if tp:
+                _save_twitch_account(tp, creator_id)
+            else:
+                db.execute("INSERT OR IGNORE INTO platform_accounts VALUES (?,?,?,?,?,?,?,?,?,?)",
+                           (f"{plat}:{handle.lower()}", creator_id, plat, handle, None, None, source,
+                            LinkedAccountCollector.source_reliability, None, db.now()))
         rows = [(campaign_id, creator_id, "youtube_search", "youtube", sn.get("customUrl"), q, None, None, "search")
                 for q in sorted(hit_queries.get(cid, []))]
         rows += [(campaign_id, creator_id, "seed", "youtube", sn.get("customUrl"), None, None, None, "manual")
                  for _ in [0] if cid in seeds]
-        rows += [(campaign_id, creator_id, "tavily_web", i["platform"], i["handle"] or i["name"], i["query"],
-                  i["source_url"], i["evidence"], i["method"]) for i in web_matches.get(cid, [])]
+        rows += [(campaign_id, creator_id, i.get("source", "tavily_web"), i["platform"], i["handle"] or i["name"],
+                  i["query"], i["source_url"], i["evidence"], i["method"]) for i in web_matches.get(cid, [])]
         db.executemany("INSERT INTO discoveries (campaign_id, creator_key, source, platform, handle, query, url,"
                        " evidence, method) VALUES (?,?,?,?,?,?,?,?,?)", rows)
         db.executemany("INSERT OR REPLACE INTO features VALUES (?,?,?,?,?,?)",
@@ -341,12 +379,23 @@ def run_campaign(brief: str, spec: CampaignSpec | None = None, seed_handles: lis
                        [(campaign_id, key, "tavily_web", s_["platform"], w["profiles"].get(s_["platform"]) or w["name"],
                          s_["query"], s_["source_url"], s_["evidence"], s_["method"]) for s_ in w["sources"]])
 
+    # Twitch-only streamers: real Twitch metrics, but no YouTube videos/comments -> listed, not ranked
+    for tp in twitch_only:
+        _save_twitch_account(tp, None)
+        db.execute("INSERT INTO discoveries (campaign_id, creator_key, source, platform, handle, query, url,"
+                   " evidence, method) VALUES (?,?,?,?,?,?,?,?,?)",
+                   (campaign_id, "twitch:" + tp["login"].lower(), "twitch_api", "twitch", tp["login"],
+                    next((i["query"] for i in identities if i.get("source") == "twitch_api"
+                          and i["handle"] == tp["login"]), None), tp["url"], tp["game"], "twitch_api"))
+
     # 7. Default ranking (the dashboard re-ranks live with other weights)
     rank_and_store(campaign_id, spec.goal, {r["creator_id"]: r for r in results.values()})
     stats = {
         "duration_s": round(time.time() - t0, 1),
         "youtube_quota_units": yt.QuotaUsage.units,
         "tavily_calls": web.TavilyUsage.calls,
+        "twitch_calls": twitch.TwitchUsage.calls, "twitch_profiles": len(twitch_profiles),
+        "twitch_matched_channels": len(twitch_matched), "twitch_only_creators": len(twitch_only),
         "text_llm_attempts": dict(llm.calls_by_model), "text_llm_cache_hits": llm.cache_hits,
         "vlm_attempts": dict(vlm.calls_by_model), "vlm_cache_hits": vlm.cache_hits,
         "transcripts": dict(yt.TranscriptStatus.counts), "transcripts_blocked": yt.TranscriptStatus.blocked,
@@ -354,17 +403,32 @@ def run_campaign(brief: str, spec: CampaignSpec | None = None, seed_handles: lis
         "creators_analysed": len(results), "vlm_failures": vlm_failures[:10],
         "disabled_models": llm_dead_models(),
         "missing_env": sorted(set(llm_missing_keys(config.LLM_MODELS) + llm_missing_keys(config.VLM_MODELS)
-                                  + ([] if config.TAVILY_API_KEY else ["TAVILY_API_KEY"]))),
+                                  + ([] if config.TAVILY_API_KEY else ["TAVILY_API_KEY"])
+                                  + ([] if twitch.available() else ["TWITCH_CLIENT_ID", "TWITCH_CLIENT_SECRET"]))),
         "errors": errors[:20],
     }
     db.execute("INSERT OR REPLACE INTO run_stats VALUES (?,?)", (campaign_id, json.dumps(stats)))
     p(f"Done: {len(results)} creators analysed · {llm.calls} text-LLM calls ({llm.cache_hits} cached) · "
-      f"{vlm.calls} VLM calls · {web.TavilyUsage.calls} Tavily calls · ~{yt.QuotaUsage.units} YouTube quota units",
+      f"{vlm.calls} VLM calls · {web.TavilyUsage.calls} Tavily calls · {twitch.TwitchUsage.calls} Twitch calls · ~{yt.QuotaUsage.units} YouTube quota units",
       1.0)
     return campaign_id
 
 
+def _save_twitch_account(tp: dict, creator_id: str | None) -> None:
+    if creator_id is None:  # keep a link to a YouTube creator made in an earlier campaign
+        prev = db.query("SELECT creator_id FROM platform_accounts WHERE platform='twitch' AND lower(handle)=?",
+                        (tp["login"].lower(),))
+        creator_id = prev[0]["creator_id"] if prev else None
+    db.execute("INSERT OR REPLACE INTO platform_accounts VALUES (?,?,?,?,?,?,?,?,?,?)",
+               ("twitch:" + tp["login"].lower(), creator_id, "twitch", tp["login"], tp["url"], tp.get("followers"),
+                "twitch_api", TwitchCollector.source_reliability,
+                json.dumps({k: tp.get(k) for k in ("name", "avatar", "description", "language", "game",
+                                                   "n_vods", "median_vod_views", "last_stream_at")}), db.now()))
+
+
 def _method(name: str) -> str:
+    if name.startswith("twitch_"):
+        return "twitch_api"
     if name in fx.CONTENT_FEATURES:
         return "llm"
     if name.startswith("visual_") or name == "n_visual_images":

@@ -191,7 +191,11 @@ def resolve_to_youtube(identities: list[dict], chans: dict[str, dict]) -> tuple[
         except yt.YouTubeError:
             c = None
         title_n = _norm(c["snippet"]["title"]) if c else ""
-        if c and (key in title_n or title_n in key) and min(len(title_n), len(key)) >= 4:
+        # a Twitch login guessed as a YouTube handle can belong to someone else: the channel title must equal
+        # the streamer's display name or login (no containment)
+        strict = i.get("source") == "twitch_api"
+        if c and (title_n in (key, _norm(i["name"])) if strict else
+                  (key in title_n or title_n in key) and min(len(title_n), len(key)) >= 4):
             chans[c["id"]] = c
             by_handle = index()
             matched.setdefault(c["id"], []).append(i)
@@ -201,6 +205,8 @@ def resolve_to_youtube(identities: list[dict], chans: dict[str, dict]) -> tuple[
     # group web-only identities per creator (same normalised handle/name)
     web_only: dict[str, dict] = {}
     for i in still:
+        if i.get("source") == "twitch_api":
+            continue  # Twitch-only streamers are listed separately with their real metrics
         k = _norm(i["handle"] or i["name"])
         if len(k) < 3:
             continue
