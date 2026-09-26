@@ -115,3 +115,18 @@ class CommentLabelItem(BaseModel):
 
 class CommentBatch(BaseModel):
     items: list[CommentLabelItem]
+
+
+# ---------- Twitch / Instagram fit (one judgement per profile, from its own text only)
+class PlatformFitItem(BaseModel):
+    i: int = Field(description="Index of the profile in the input list")
+    audience_relevance: int = Field(ge=0, le=3, description=(
+        "How strongly this creator's content attracts the campaign's TARGET AUDIENCE (see audience interests): "
+        "0 none, 1 weak/occasional, 2 clearly, 3 central"))
+    content_language: str = Field(description="ISO 639-1 code of the language most of the given text is written in")
+    summary: str = Field(description="One sentence on why this creator does or does not reach the target audience")
+    evidence: list[str] = Field(description="Up to 2 short verbatim quotes (<= 15 words) copied from the profile text")
+
+
+class PlatformFitBatch(BaseModel):
+    items: list[PlatformFitItem]

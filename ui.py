@@ -90,6 +90,15 @@ hr {{ border-color: {T['border']}; }}
 .stButton > button[kind^="primary"]:hover, .stFormSubmitButton > button[kind^="primary"]:hover {{
   background: {T['cta_hover']}; color: {T['cta_text']}; }}
 .stButton > button:focus-visible {{ outline: 2px solid {T['accent']}; outline-offset: 2px; }}
+/* link buttons (Open on Twitch / Instagram): same pills as the buttons */
+.stLinkButton > a {{ border-radius: 999px; font-weight: 600; border: 1px solid {T['border_strong']};
+  background: {T['surface']}; color: {T['text']}; }}
+.stLinkButton > a[data-testid$="primary"], .stLinkButton > a[kind^="primary"] {{
+  background: {T['cta']}; color: {T['cta_text']}; border-color: {T['cta']}; font-weight: 700;
+  box-shadow: inset 0 -2px 0 rgba(37,111,80,.35); }}
+.stLinkButton > a[data-testid$="primary"]:hover, .stLinkButton > a[kind^="primary"]:hover {{
+  background: {T['cta_hover']}; color: {T['cta_text']}; }}
+.stLinkButton > a[data-testid$="primary"] p, .stLinkButton > a[kind^="primary"] p {{ color: {T['cta_text']}; }}
 
 /* inputs */
 .stTextInput input, .stTextArea textarea, .stNumberInput input, div[data-baseweb="select"] > div {{
@@ -260,6 +269,7 @@ div[class*="st-key-band"] div[class*="st-key-cart"] button {{ background:transpa
 div[class*="st-key-band"] div[class*="st-key-cart"] button:hover {{ border-color:#9DF69A !important; color:#9DF69A !important; }}
 div[class*="st-key-band"] div[class*="st-key-cart-on"] button {{ background:#9DF69A !important; color:#1D1D35 !important;
   border-color:#9DF69A !important; }}
+div[class*="st-key-band"] div[class*="st-key-cart-on"] button * {{ color:#1D1D35 !important; }}
 /* discover: one-line verdict above the cards */
 .pn-pick .k {{ font-size:.7rem; font-weight:700; letter-spacing:.1em; text-transform:uppercase; color:{T['accent']}; }}
 .pn-pick .n {{ font-family:'Sora',sans-serif; font-weight:700; font-size:1.15rem; margin:2px 0; }}

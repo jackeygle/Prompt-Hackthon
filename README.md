@@ -30,11 +30,12 @@ python check_setup.py      # one tiny request per API: shows exactly which keys/
 | YouTube search (market / language, last 12 months) | `youtube.py` | YouTube | 100 quota units per query |
 | Web discovery | `web_discovery.discover` | Tavily + Groq | 6 basic searches (general + `site:` TikTok/Instagram/Twitch/YouTube); profile URLs parsed deterministically; 1 LLM call extracts creator names from articles (names must appear in the cited result) |
 | Twitch discovery | `twitch.discover` | Twitch Helix (free) | live streams in the target language in audience-interest categories + top games + Science & Technology; live channel search; Tavily-found Twitch handles verified. ≤30 profiles: follower total, main category, median VOD views, last stream; follower range from spec |
-| Identity merge / dedup | `web_discovery.resolve_to_youtube` | YouTube | handles/channel IDs/normalised names → YouTube channels (≤15 `forHandle` lookups); unmatched → *web-only* list (not ranked) |
+| Identity merge / dedup | `web_discovery.resolve_to_youtube` | YouTube | handles/channel IDs/normalised names → YouTube channels (≤25 `forHandle` lookups); unmatched Twitch/Instagram accounts go to their platform ranking, the rest → *web-only* list (not ranked) |
 | Cheap filter | `pipeline.run_campaign` | – | subscriber range from spec, country in market if declared; screens max(20, 2×creators) channels (≤100) by search hits + 2×web mentions |
 | Upload screening | `features.relevant_video_ids` | Groq | 1 call per channel over its last 30 titles; a video counts if its viewers plausibly belong to the target audience (product/niche **or** the audience's interests, e.g. PC gaming, game performance, tech) |
 | Deep analysis (N creators, user-selected) | `features.py` | YouTube + Groq | 5 relevant videos, transcript if available else title+description, 50 comments/video |
-| Instagram numbers | `instagram.py` | Instagram Graph API (Business Discovery) | ranked and web-only creators with a known Instagram handle: followers, median likes/comments of the last 12 posts, engagement rate, posts in the last 30 days. Professional accounts only; descriptive, never scored |
+| Instagram numbers | `instagram.py` | Instagram Graph API (Business Discovery) | Instagram handles linked from YouTube descriptions (screened channels), Twitch bios and web search: followers, median likes/comments of the last 12 posts, engagement rate, posts in the last 30 days. Professional accounts only; feeds the Instagram ranking and the chip on YouTube cards |
+| Twitch / Instagram rankings | `features.platform_fit` + `ranking.py` | Groq + official APIs | every Twitch streamer and verified Instagram account in the follower range gets its **own ranking**: one batched LLM call judges audience relevance from the profile's own text (bio, stream titles, captions; verbatim quotes checked), numbers come from the APIs. Same AHP groups/goal as YouTube, platform criteria below |
 | Visual features | `vision.py` | OpenAI | 1 call per creator, 4 official thumbnail URLs, `detail=low` |
 | Hard filter → AHP → TOPSIS | `ranking.py` | – | deterministic; criteria with < 50% coverage are dropped and shown |
 | UI | `app.py` + `ui.py` | – | Campaign / Discover / Shortlist; creator cards, analysis with evidence cards, live AHP re-weighting, staged loader driven by real pipeline progress |
@@ -54,6 +55,14 @@ All YouTube and LLM responses are cached in SQLite (`api_cache`), so re-runs cos
 - **Reach & Performance**: log median relevant views · engagement rate · views/subscriber · view volatility (C)
 - **Cost & Risk**: *Estimated Cost Proxy* = median relevant views × assumed €20 CPM (C) — **not a creator quote** ·
   spam ratio (C) · days since last relevant upload (C)
+
+**Twitch** (own ranking): audience relevance of stream titles (LLM) · VOD views / followers · followers (log) ·
+median VOD views (log) · streams in 30 days · days since last stream (C). Hard filter: streamed in the last 60 days,
+relevance ≥ 1.
+**Instagram** (own ranking): audience relevance of captions (LLM) · captions in target language · engagement rate ·
+comments per like · followers (log) · median likes (log) · posts in 30 days · days since last post (C). Hard filter:
+posted in the last 60 days, ≥ 3 visible posts, relevance ≥ 1. Scores are relative within each platform and are not
+comparable across platforms; Data Confidence for these is capped at 0.9 (no comment analysis).
 
 Missing values are imputed with the unfavourable quartile and lower confidence; columns are winsorised
 (5/95) and vector-normalised.
@@ -86,8 +95,9 @@ Missing values are imputed with the unfavourable quartile and lower confidence; 
   keyword search, no audience demographics. The user token expires after 60 days (extend it in Meta's Access
   Token Tool).
 - Twitch: streamers are merged with their YouTube channel (YouTube link in the Twitch bio, or exact name match)
-  and ranked on their YouTube data; the Twitch follower total is shown on the card but never changes the score.
-  Streamers without a YouTube match are listed with real Twitch metrics, not ranked (no videos/comments to analyse).
+  (YouTube card shows the Twitch follower chip) and every streamer is also ranked in the separate Twitch ranking.
+  YouTube, Twitch and Instagram each have their own ranking; a creator can appear in several, and the YouTube score
+  never uses Twitch/Instagram numbers.
   Discovery uses streams that are live at run time, so results vary by time of day.
 - LLM cache keys are provider-independent: an identical prompt answered once is reused, whichever model answered.
 

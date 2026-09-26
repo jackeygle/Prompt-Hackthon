@@ -112,3 +112,29 @@ def test_visual_weight_is_small_and_explicit():
     w, _ = ranking.ahp_weights(ranking.AHP_PRESETS["conversion"])
     cw = ranking.criterion_weights(dict(zip(ranking.GROUPS, w)))
     assert 0 < cw["visual_product_share"] < 0.03
+
+
+def test_platform_rankings_use_own_criteria_and_filters():
+    import pandas as pd
+    import features as fx
+    tw = {"tw_audience_relevance": 3, "tw_days_since_last_stream": 2, "tw_log_followers": 5.0,
+          "tw_log_median_vod_views": 3.0, "tw_vod_view_ratio": 0.01, "tw_streams_30d": 12, "tw_n_vods": 20}
+    assert ranking.platform_hard_filter("twitch", tw) == (True, "")
+    ok, why = ranking.platform_hard_filter("twitch", {**tw, "tw_audience_relevance": 0, "tw_days_since_last_stream": 90})
+    assert not ok and "relevance" in why and "60 days" in why
+    ig_ok, ig_why = ranking.platform_hard_filter("instagram", {"ig_audience_relevance": 2, "ig_days_since_last_post": 5,
+                                                               "ig_n_posts": 1})
+    assert not ig_ok and "3 recent posts" in ig_why
+    # Content Credibility has no Twitch criteria: its weight drops out, the rest renormalise
+    w = ranking.criterion_weights({g: 0.2 for g in ranking.GROUPS}, ranking.TWITCH_CRITERIA)
+    assert set(w) == {c.name for c in ranking.TWITCH_CRITERIA} and abs(sum(w.values()) - 1) < 1e-9
+    df = pd.DataFrame({"a": tw, "b": {**tw, "tw_audience_relevance": 1, "tw_log_followers": 4.0}}).T
+    res = ranking.topsis(df.reindex(columns=[c.name for c in ranking.TWITCH_CRITERIA]), w, ranking.TWITCH_CRITERIA)
+    assert list(res.index) == ["a", "b"]
+    assert ranking.platform_confidence("twitch", tw) <= 0.9  # no comment analysis: never full confidence
+    f = fx.platform_features("instagram", {"followers": 1000, "engagement_rate": 0.05, "median_likes": 40,
+                                           "median_comments": 4, "posts_last_30d": 3, "n_posts": 12,
+                                           "last_post_at": "2026-09-01T10:00:00+0000"},
+                             {"audience_relevance": 2, "content_language": "de", "summary": "",
+                              "evidence": [{"quote": "x", "verified": True}]}, "de")
+    assert f["ig_comment_like_ratio"] == 0.1 and f["ig_target_lang"] == 1.0 and f["ig_fit_evidence"] == 1.0

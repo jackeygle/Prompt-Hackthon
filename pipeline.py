@@ -336,6 +336,9 @@ def run_campaign(brief: str, spec: CampaignSpec | None = None, seed_handles: lis
     ig_profiles: dict[str, dict] = {}
     ig_handles = [r["links"]["instagram"][0] for r in results.values() if "instagram" in r["links"]]
     ig_handles += [w["profiles"]["instagram"] for w in web_only if w["profiles"].get("instagram")]
+    ig_handles += [tp["links"]["instagram"] for tp in twitch_profiles.values() if tp.get("links", {}).get("instagram")]
+    ig_handles += [h for cid in shortlist  # screened channels that link an Instagram account in their description
+                   if (h := extract_social_links(chans[cid]["snippet"].get("description", "")).get("instagram"))]
     if ig_handles and config.INSTAGRAM_ENABLED and instagram.available():
         p(f"Instagram: loading {len(set(ig_handles))} profiles", 0.91)
         ig_profiles, ierr = instagram.profiles(ig_handles)
@@ -346,6 +349,22 @@ def run_campaign(brief: str, spec: CampaignSpec | None = None, seed_handles: lis
             r["features"]["instagram_followers"] = ip["followers"]
         if ip and ip["engagement_rate"] is not None:
             r["features"]["instagram_engagement_rate"] = ip["engagement_rate"]
+
+    # 5d. Separate Twitch / Instagram rankings: official numbers + one LLM fit judgement on the profile's own text
+    in_range = lambda n: n is None or spec.min_subscribers <= n <= spec.max_subscribers
+    by_platform = {
+        "twitch": {k: v for k, v in twitch_profiles.items() if in_range(v.get("followers"))
+                   and (not v.get("language") or v["language"] == spec.target_language)},
+        "instagram": {k: v for k, v in ig_profiles.items() if in_range(v.get("followers"))},
+    }
+    platform_rows: dict[str, tuple] = {}
+    for plat, profs in by_platform.items():
+        if profs:
+            p(f"{plat.capitalize()}: judging {len(profs)} profiles", 0.915)
+            fits = fx.platform_fit(llm, spec, plat, profs)
+            for k, prof in profs.items():
+                platform_rows[f"{plat}:{k}"] = (plat, prof, fits.get(k),
+                                                fx.platform_features(plat, prof, fits.get(k), spec.target_language))
 
     # 6. Persist creators, accounts, discoveries, features, evidence, visual tags
     p("Ranking", 0.92)
@@ -401,7 +420,24 @@ def run_campaign(brief: str, spec: CampaignSpec | None = None, seed_handles: lis
                        [(campaign_id, key, "tavily_web", s_["platform"], w["profiles"].get(s_["platform"]) or w["name"],
                          s_["query"], s_["source_url"], s_["evidence"], s_["method"]) for s_ in w["sources"]])
 
-    # Twitch-only streamers: real Twitch metrics, but no YouTube videos/comments -> listed, not ranked
+    # Twitch / Instagram candidates (ranked per platform); accounts keep any link to a YouTube creator made above
+    for pid, (plat, prof, fit, f) in platform_rows.items():
+        (_save_twitch_account if plat == "twitch" else _save_instagram_account)(prof, None)
+        db.execute("INSERT OR REPLACE INTO creators VALUES (?,?,?,?,?)",
+                   (pid, prof.get("name") or pid.split(":", 1)[1], plat, None, db.now()))
+        db.executemany("INSERT OR REPLACE INTO features VALUES (?,?,?,?,?,?)",
+                       [(campaign_id, pid, k, float(v), _method(k), None) for k, v in f.items() if v is not None])
+        feat = ("tw" if plat == "twitch" else "ig") + "_audience_relevance"
+        db.executemany("INSERT INTO evidence (campaign_id, creator_id, feature, content_id, quote, verified)"
+                       " VALUES (?,?,?,?,?,?)",
+                       [(campaign_id, pid, feat, prof["url"], e["quote"], int(e["verified"]))
+                        for e in (fit or {}).get("evidence", [])])
+        if plat == "instagram":
+            db.execute("INSERT INTO discoveries (campaign_id, creator_key, source, platform, handle, query, url,"
+                       " evidence, method) VALUES (?,?,?,?,?,?,?,?,?)",
+                       (campaign_id, pid, "instagram_graph_api", "instagram", prof["username"], None, prof["url"],
+                        "handle from YouTube / web / Twitch profile, numbers verified", "business_discovery"))
+    # Twitch-found streamers: how they were found (also for those whose YouTube channel was not analysed)
     for tp in twitch_only:
         _save_twitch_account(tp, None)
         db.execute("INSERT INTO discoveries (campaign_id, creator_key, source, platform, handle, query, url,"
@@ -412,6 +448,10 @@ def run_campaign(brief: str, spec: CampaignSpec | None = None, seed_handles: lis
 
     # 7. Default ranking (the dashboard re-ranks live with other weights)
     rank_and_store(campaign_id, spec.goal, {r["creator_id"]: r for r in results.values()})
+    for plat in ("twitch", "instagram"):
+        rank_platform_and_store(campaign_id, plat, spec.goal,
+                                {pid: {"summary": (fit or {}).get("summary", "")}
+                                 for pid, (pl, _, fit, _) in platform_rows.items() if pl == plat})
     stats = {
         "duration_s": round(time.time() - t0, 1),
         "youtube_quota_units": yt.QuotaUsage.units,
@@ -419,6 +459,7 @@ def run_campaign(brief: str, spec: CampaignSpec | None = None, seed_handles: lis
         "twitch_calls": twitch.TwitchUsage.calls, "twitch_profiles": len(twitch_profiles),
         "twitch_matched_channels": len(twitch_matched), "twitch_only_creators": len(twitch_only),
         "instagram_calls": instagram.InstagramUsage.calls, "instagram_profiles": len(ig_profiles),
+        "platform_candidates": {pl: sum(r[0] == pl for r in platform_rows.values()) for pl in ("twitch", "instagram")},
         "text_llm_attempts": dict(llm.calls_by_model), "text_llm_cache_hits": llm.cache_hits,
         "vlm_attempts": dict(vlm.calls_by_model), "vlm_cache_hits": vlm.cache_hits,
         "transcripts": dict(yt.TranscriptStatus.counts), "transcripts_blocked": yt.TranscriptStatus.blocked,
@@ -478,9 +519,11 @@ def _method(name: str) -> str:
     return "stat"
 
 
-def load_features(campaign_id: str) -> dict[str, dict]:
+def load_features(campaign_id: str, prefix: str = "yt:") -> dict[str, dict]:
+    """Features of one platform's candidates (creator ids are prefixed: yt: / twitch: / instagram:)."""
     out: dict[str, dict] = {}
-    for row in db.query("SELECT creator_id, name, value FROM features WHERE campaign_id=?", (campaign_id,)):
+    for row in db.query("SELECT creator_id, name, value FROM features WHERE campaign_id=? AND creator_id LIKE ?",
+                        (campaign_id, prefix + "%")):
         out.setdefault(row["creator_id"], {})[row["name"]] = row["value"]
     return out
 
@@ -496,7 +539,7 @@ def rank_and_store(campaign_id: str, preset: str, extra: dict | None = None) -> 
     res = ranking.topsis(df, weights) if len(df) else pd.DataFrame()
     previous = {r["creator_id"]: json.loads(r["breakdown_json"] or "{}")
                 for r in db.query("SELECT creator_id, breakdown_json FROM rankings WHERE campaign_id=?", (campaign_id,))}
-    db.execute("DELETE FROM rankings WHERE campaign_id=?", (campaign_id,))
+    db.execute("DELETE FROM rankings WHERE campaign_id=? AND creator_id LIKE 'yt:%'", (campaign_id,))
     for cid, f in feats.items():
         p_ok, reason = passed[cid]
         n_imp = int(sum(bool(res.loc[cid, f"imputed__{c}"]) for c in res.attrs["weights"])) if p_ok else 0
@@ -508,6 +551,28 @@ def rank_and_store(campaign_id: str, preset: str, extra: dict | None = None) -> 
         db.execute("INSERT INTO rankings VALUES (?,?,?,?,?,?,?,?)",
                    (campaign_id, cid, int(res.loc[cid, "rank"]) if p_ok else None,
                     float(res.loc[cid, "score"]) if p_ok else None, conf, int(p_ok), reason, json.dumps(meta)))
+
+
+def rank_platform_and_store(campaign_id: str, platform: str, preset: str, meta: dict | None = None) -> None:
+    import pandas as pd
+    crits = ranking.PLATFORM_CRITERIA[platform]
+    feats = load_features(campaign_id, platform + ":")
+    w_groups, _ = ranking.ahp_weights(ranking.AHP_PRESETS[preset])
+    weights = ranking.criterion_weights(dict(zip(ranking.GROUPS, w_groups)), crits)
+    passed = {cid: ranking.platform_hard_filter(platform, f) for cid, f in feats.items()}
+    ok = [cid for cid, (p_ok, _) in passed.items() if p_ok]
+    df = pd.DataFrame({cid: feats[cid] for cid in ok}).T.reindex(columns=[c.name for c in crits])
+    res = ranking.topsis(df, weights, crits) if ok else pd.DataFrame()
+    db.execute("DELETE FROM rankings WHERE campaign_id=? AND creator_id LIKE ?", (campaign_id, platform + ":%"))
+    for cid, f in feats.items():
+        p_ok, reason = passed[cid]
+        m = dict((meta or {}).get(cid, {}), platform=platform)
+        if p_ok:
+            m["explain"] = ranking.explain(res.loc[cid], res.attrs["weights"])
+        db.execute("INSERT INTO rankings VALUES (?,?,?,?,?,?,?,?)",
+                   (campaign_id, cid, int(res.loc[cid, "rank"]) if p_ok else None,
+                    float(res.loc[cid, "score"]) if p_ok else None, ranking.platform_confidence(platform, f),
+                    int(p_ok), reason, json.dumps(m)))
 
 
 def export_demo(path=config.ROOT / "data" / "demo.db") -> None:

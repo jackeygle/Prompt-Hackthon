@@ -12,7 +12,7 @@ import json
 import logging
 import statistics
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import requests
 
@@ -147,6 +147,7 @@ def profiles(logins: list[str]) -> dict[str, dict]:
     us = users(list(dict.fromkeys(l.lower() for l in logins if l)))
     info = {c["broadcaster_id"]: c for c in channel_info([u["id"] for u in us])} if us else {}
     out = {}
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=30)).strftime("%Y-%m-%dT%H:%M:%SZ")
     for u in us:
         vods = recent_vods(u["id"])
         views = [v["view_count"] for v in vods if v.get("view_count") is not None]
@@ -158,6 +159,8 @@ def profiles(logins: list[str]) -> dict[str, dict]:
             "description": desc[:500], "language": ch.get("broadcaster_language"), "game": ch.get("game_name"),
             "followers": follower_total(u["id"]),
             "n_vods": len(vods), "median_vod_views": int(statistics.median(views)) if views else None,
+            "vod_titles": [v.get("title", "") for v in vods[:10]],
+            "streams_30d": sum(v["created_at"] >= cutoff for v in vods),
             "last_stream_at": max((v["created_at"] for v in vods), default=None),
             "youtube": [i for i in identities_from_url_text(desc) if i["platform"] == "youtube"],
             "links": extract_social_links(desc),

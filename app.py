@@ -71,7 +71,23 @@ REASON = {
     "log_est_cost_eur": ("Low estimated cost proxy", "High estimated cost proxy"),
     "spam_ratio": ("Clean, low-spam comments", "Noticeable spam in comments"),
     "days_since_last_relevant": ("Recently active on the topic", "Not recently active on the topic"),
+    # Twitch / Instagram rankings
+    "tw_audience_relevance": ("Streams what our target audience watches", "Weak link to our target audience"),
+    "tw_vod_view_ratio": ("Replays watched well for the follower count", "Few replay views for the follower count"),
+    "tw_log_followers": ("Large follower base", "Smaller follower base"),
+    "tw_log_median_vod_views": ("Strong replay views", "Low replay views"),
+    "tw_streams_30d": ("Streams regularly", "Streams rarely"),
+    "tw_days_since_last_stream": ("Streamed recently", "Has not streamed recently"),
+    "ig_audience_relevance": ("Posts what our target audience follows", "Weak link to our target audience"),
+    "ig_target_lang": ("Posts in {lang}", "Posts mostly not in {lang}"),
+    "ig_engagement_rate": ("High engagement rate", "Lower engagement rate"),
+    "ig_comment_like_ratio": ("Followers actively comment", "Few comments per like"),
+    "ig_log_followers": ("Large follower base", "Smaller follower base"),
+    "ig_log_median_likes": ("Strong likes per post", "Fewer likes per post"),
+    "ig_posts_30d": ("Posts regularly", "Posts rarely"),
+    "ig_days_since_last_post": ("Posted recently", "Has not posted recently"),
 }
+PLATFORMS = {"youtube": "YouTube", "twitch": "Twitch", "instagram": "Instagram"}
 EVIDENCE_KIND = {"audience_relevance": "Audience relevance", "niche_relevance": "Niche relevance", "product_relevance": "Product relevance",
                  "price_segment_relevance": "Price-segment evidence", "first_hand_experience": "Hands-on evidence",
                  "benchmark_discussion": "Test & results evidence", "price_discussion": "Price evidence",
@@ -242,9 +258,54 @@ def build_context(campaign: dict) -> dict:
         for v in vms.values():
             vs = sorted((by_id[i] for i in v.get("videos") or [] if i in by_id), key=lambda r: r["published_at"] or "")
             v["video_views"] = [r["views"] for r in vs]
+    platforms = {pl: build_platform(pl, cid_c, gw, stored, creators, lang) for pl in ("twitch", "instagram")}
     return {"campaign": campaign, "spec": spec, "feats": feats, "res": res, "weights": weights, "used": used,
             "group_w": gw, "passed": passed, "vms": vms, "creators": creators, "discoveries": discoveries,
-            "run_stats": run_stats, "lang": lang, "budget": budget}
+            "run_stats": run_stats, "lang": lang, "budget": budget, "platforms": platforms}
+
+
+def build_platform(platform: str, cid_c: str, gw: dict, stored: dict, creators: dict, lang: str) -> dict:
+    """Separate Twitch / Instagram ranking, re-computed live with the same group weights as YouTube."""
+    crits = ranking.PLATFORM_CRITERIA[platform]
+    feats = pipeline.load_features(cid_c, platform + ":")
+    passed = {c: ranking.platform_hard_filter(platform, f) for c, f in feats.items()}
+    ok = [c for c, (p, _) in passed.items() if p]
+    df = pd.DataFrame({c: feats[c] for c in ok}).T.reindex(columns=[c.name for c in crits])
+    weights = ranking.criterion_weights(gw, crits)
+    res = ranking.topsis(df, weights, crits) if ok else pd.DataFrame(columns=["score", "rank"])
+    used = res.attrs.get("weights", {})
+    acc = {r["id"]: r for r in db.query("SELECT * FROM platform_accounts WHERE platform=?", (platform,))}
+    quotes: dict[str, list[str]] = {}
+    for r in db.query("SELECT creator_id, quote FROM evidence WHERE campaign_id=? AND creator_id LIKE ? AND verified=1",
+                      (cid_c, platform + ":%")):
+        quotes.setdefault(r["creator_id"], []).append(r["quote"])
+    pre = "tw" if platform == "twitch" else "ig"
+    vms = {}
+    for c in res.index:
+        f, a = feats[c], acc.get(c, {})
+        raw = json.loads(a.get("raw_json") or "{}")
+        ex = ranking.explain(res.loc[c], used, k=len(used))
+        good = sorted((x for x in ex["strengths"] if x["closeness"] >= 0.6),
+                      key=lambda x: (GROUP_ORDER[ranking.CRITERION_BY_NAME[x["criterion"]].group],
+                                     -x["weight"] * x["closeness"]))
+        conf = ranking.platform_confidence(platform, f)
+        vms[c] = {
+            "id": c, "platform": platform, "name": creators.get(c, {}).get("name") or a.get("handle") or c,
+            "handle": a.get("handle"), "url": a.get("url"), "avatar": raw.get("avatar"),
+            "rank": int(res.loc[c, "rank"]), "score": round(100 * float(res.loc[c, "score"])),
+            "conf": conf, "conf_label": ranking.confidence_label(conf),
+            "followers": f.get(f"{pre}_followers"), "features": f,
+            "sub": raw.get("game") if platform == "twitch" else (raw.get("biography") or "")[:80],
+            "summary": json.loads(stored.get(c, {}).get("breakdown_json") or "{}").get("summary", ""),
+            "quotes": quotes.get(c, []),
+            "reasons": [REASON[x["criterion"]][0].format(lang=lang) for x in good if x["criterion"] in REASON][:3],
+            "gaps": [REASON[x["criterion"]][1].format(lang=lang) for x in ex["gaps"][:3]
+                     if x["closeness"] <= 0.35 and x["criterion"] in REASON],
+            "youtube": a.get("creator_id") if str(a.get("creator_id") or "").startswith("yt:") else None,
+        }
+    for v in vms.values():
+        v["tier"] = ui.tier_of(v["rank"], len(vms))
+    return {"vms": vms, "passed": passed, "feats": feats, "used": used}
 
 
 # ------------------------------------------------------------------ chrome
@@ -665,9 +726,16 @@ def discover_page(ctx: dict, short: list[str]) -> None:
                    "".join(ui.chip(x) for x in [COUNTRY.get(spec.target_country, spec.target_country), ctx["lang"],
                                                  spec.price_segment,
                                                  f"Goal: {preset_of(spec, ctx['campaign']['id']).capitalize()}"] if x),
-                   f"{len(vms)} ranked · {analysed} analysed · {analysed - len(vms)} filtered out")
-    f1, f2, f3, f4, f5, f6 = st.columns([1.4, 1.7, 1.1, 1.3, 1.2, 1.2], vertical_alignment="bottom")
+                   f"YouTube: {len(vms)} ranked · {analysed} analysed · {analysed - len(vms)} filtered out")
     c = ctx["campaign"]["id"]  # filters survive a visit to a creator's analysis and back
+    counts = {"youtube": len(vms), **{pl: len(P["vms"]) for pl, P in ctx["platforms"].items()}}
+    platform = st.segmented_control(
+        "Platform", list(PLATFORMS), required=True, label_visibility="collapsed",
+        format_func=lambda pl: f"{PLATFORMS[pl]} · {counts[pl]}", **keep(f"f_platform_{c}", "youtube"))
+    if platform != "youtube":
+        platform_page(ctx, platform, short)
+        return
+    f1, f2, f3, f4, f5, f6 = st.columns([1.4, 1.7, 1.1, 1.3, 1.2, 1.2], vertical_alignment="bottom")
     query = f1.text_input("Search", placeholder="Search creators", label_visibility="collapsed",
                           **keep(f"f_query_{c}", ""))
     conf_filter = f2.segmented_control("Confidence", ["All", "Medium+", "High"], required=True,
@@ -714,6 +782,93 @@ def discover_page(ctx: dict, short: list[str]) -> None:
                 with col:
                     creator_card(vm, ctx, vm["id"] in short)
     method_section(ctx)
+
+
+PLATFORM_STATS = {
+    "twitch": [("Followers", lambda v: ui.fmt_count(v["followers"])),
+               ("Median VOD views", lambda v: ui.fmt_count(v["features"].get("tw_median_vod_views"))),
+               ("Streams · 30 days", lambda v: ui.fmt_count(v["features"].get("tw_streams_30d")))],
+    "instagram": [("Followers", lambda v: ui.fmt_count(v["followers"])),
+                  ("Engagement", lambda v: ui.pct1(v["features"].get("ig_engagement_rate"))),
+                  ("Posts · 30 days", lambda v: ui.fmt_count(v["features"].get("ig_posts_30d")))],
+}
+EMPTY_HINT = {
+    "twitch": "Twitch candidates are streamers live in the target language during the run, plus Twitch accounts "
+              "linked from YouTube or the web. Needs TWITCH_CLIENT_ID / TWITCH_CLIENT_SECRET; reports created before "
+              "the Twitch ranking have no Twitch data.",
+    "instagram": "Instagram candidates are handles linked from YouTube descriptions, Twitch bios or web search "
+                 "(professional accounts only). Needs INSTAGRAM_ACCESS_TOKEN; older reports have no Instagram data.",
+}
+
+
+def platform_card(vm: dict, ctx: dict, shortlisted: bool) -> None:
+    pl, name = vm["platform"], PLATFORMS[vm["platform"]]
+    with st.container(key=f"card-cr-{ui.key(vm['id'])}"):
+        n = vm["features"].get("tw_n_vods" if pl == "twitch" else "ig_n_posts")
+        basis = f"{int(n or 0)} {'streams' if pl == 'twitch' else 'posts'} · official API"
+        badges = ui.confidence_badge(vm["conf"], vm["conf_label"], basis=basis)
+        yt = ctx["vms"].get(vm["youtube"]) if vm["youtube"] else None
+        if yt:
+            badges += (f' <span class="pn-chip pn-pchip" title="Same creator in the YouTube ranking">'
+                       f'{ui.platform_icon("youtube")}<span>YouTube #{yt["rank"]}</span></span>')
+        stats = "".join(ui.stat_tile(k, fn(vm)) for k, fn in PLATFORM_STATS[pl])
+        reason = ui.reasons_list(vm["reasons"][:1]) if vm["reasons"] else ""
+        quote = (f'<div class="pn-subtle" style="margin-top:6px" title="Verbatim from the profile">'
+                 f'“{esc(vm["quotes"][0])}”</div>' if vm["quotes"] else "")
+        html(f'<div class="pn-card-head">{ui.avatar(vm["name"], vm["avatar"])}<div class="who">'
+             f'<div class="pn-rank" title="{name}">#{vm["rank"]} {ui.platform_icon(pl, 13)}{name}</div>'
+             f'<div class="name" title="{esc(vm["name"])}">{esc(vm["name"])}</div>'
+             f'<div class="meta">{esc(vm["sub"] or ("@" + (vm["handle"] or "")))}</div></div>'
+             f'<div class="pn-scorewrap">{ui.tier_badge(vm["tier"])}{ui.score_ring(vm["score"], "Score")}</div></div>'
+             f'<div style="margin:10px 0 2px">{badges}</div><div class="pn-stats three">{stats}</div>{reason}{quote}')
+        a, b = st.columns(2)
+        if vm["url"]:
+            a.link_button(f"Open on {name}", vm["url"], type="primary", width="stretch")
+        b.button("✓ Shortlisted" if shortlisted else "+ Shortlist", key=f"sl_{vm['id']}", width="stretch",
+                 on_click=toggle_shortlist, args=(ctx["campaign"]["id"], vm["id"]))
+
+
+def platform_page(ctx: dict, platform: str, short: list[str]) -> None:
+    P, name, c = ctx["platforms"][platform], PLATFORMS[platform], ctx["campaign"]["id"]
+    f1, f2, f3 = st.columns([2.2, 1.6, 1.2], vertical_alignment="bottom")
+    query = f1.text_input("Search", placeholder=f"Search {name} creators", label_visibility="collapsed",
+                          **keep(f"f_query_{platform}_{c}", ""))
+    sort = f2.selectbox("Sort", ["Campaign score", "Followers", "Data confidence"], label_visibility="collapsed",
+                        **keep(f"f_sort_{platform}_{c}", "Campaign score"))
+    with f3:
+        weights_controls(ctx["spec"], c)
+    items = sorted(P["vms"].values(), key=lambda v: v["rank"])
+    if query:
+        items = [v for v in items if query.lower() in v["name"].lower()]
+    if sort == "Followers":
+        items.sort(key=lambda v: -(v["followers"] or 0))
+    elif sort == "Data confidence":
+        items.sort(key=lambda v: -v["conf"])
+    st.write("")
+    if not P["feats"]:
+        ui.empty_state(f"No {name} candidates in this report.", EMPTY_HINT[platform])
+    elif not P["vms"]:
+        ui.empty_state(f"No {name} creator passed the filters.", "See the excluded list below.")
+    elif not items:
+        ui.empty_state("No creators match this search.", "Clear the search.")
+    else:
+        for i in range(0, len(items), 3):
+            for col, vm in zip(st.columns(3, gap="medium"), items[i:i + 3]):
+                with col:
+                    platform_card(vm, ctx, vm["id"] in short)
+    st.write("")
+    with st.expander(f"How the {name} ranking works"):
+        html(f'<div class="pn-muted" style="margin-bottom:8px">Own ranking for {name}: numbers from the official '
+             f'{name} API plus one AI judgement of the profile’s own text (audience relevance, with verbatim quotes). '
+             'Same campaign goal and weights as YouTube; scores are relative to the other '
+             f'{name} candidates and not comparable with the YouTube score.</div>')
+        if P["used"]:
+            html("".join(ui.metric_bar(ranking.CRITERION_BY_NAME[k].label, 100 * w, display=f"{w:.0%}")
+                         for k, w in sorted(P["used"].items(), key=lambda t: -t[1])))
+    excluded = [(ctx["creators"].get(k, {}).get("name", k), r) for k, (p, r) in P["passed"].items() if not p]
+    if excluded:
+        with st.expander(f"Excluded by filters ({len(excluded)})"):
+            st.dataframe(pd.DataFrame(excluded, columns=["Creator", "Reason"]), hide_index=True, width="stretch")
 
 
 def method_section(ctx: dict) -> None:
@@ -767,53 +922,16 @@ def method_section(ctx: dict) -> None:
             "SELECT * FROM platform_accounts WHERE platform='instagram' AND followers IS NOT NULL")}
         ig_handle = wo[wo.platform == "instagram"].groupby("creator_key")["handle"].first()
         verified = {k: ig_acc[str(h).lower()] for k, h in ig_handle.items() if str(h).lower() in ig_acc}
-        if verified:  # found on the web, numbers confirmed by the Instagram Graph API
-            rows = []
-            for k, a in verified.items():
-                raw = json.loads(a.get("raw_json") or "{}")
-                first = wo[wo.creator_key == k].iloc[0]
-                rows.append({"Creator": raw.get("name") or a["handle"], "Followers": a["followers"],
-                             "Engagement": raw.get("engagement_rate"), "Median likes": raw.get("median_likes"),
-                             "Posts (30 days)": raw.get("posts_last_30d"),
-                             "Last post": (raw.get("last_post_at") or "")[:10] or None,
-                             "Found via": first["query"], "Instagram": a["url"]})
-            g = pd.DataFrame(rows).sort_values("Followers", ascending=False, na_position="last")
-            with st.expander(f"Instagram creators, no YouTube match ({len(g)}) — not ranked"):
-                st.caption("Found by web search, numbers from the official Instagram API (latest posts). No YouTube "
-                           "videos or comments to analyse — review manually. Sorted by followers, not a ranking.")
-                st.dataframe(g, hide_index=True, width="stretch", column_config={
-                    "Instagram": st.column_config.LinkColumn(display_text="Open"),
-                    "Followers": st.column_config.NumberColumn(format="%d"),
-                    "Engagement": st.column_config.NumberColumn(format="percent"),
-                    "Median likes": st.column_config.NumberColumn(format="%d")})
         rest = wo[~wo.creator_key.isin(verified)]
         if not rest.empty:
             g = rest.groupby("creator_key").agg(
                 Creator=("handle", "first"), Platforms=("platform", lambda x: ", ".join(sorted(set(x)))),
                 Mentions=("url", "count"), Evidence=("evidence", "first"), Source=("url", "first"))
             with st.expander(f"Found on web & social, no YouTube match ({len(g)}) — not ranked"):
-                st.caption("No verified metrics available — review manually.")
+                st.caption("No verified metrics available — review manually. Creators with a verified Instagram "
+                           "account are ranked in the Instagram tab.")
                 st.dataframe(g.sort_values("Mentions", ascending=False), hide_index=True, width="stretch",
                              column_config={"Source": st.column_config.LinkColumn()})
-    if not d.empty and d.creator_key.str.startswith("twitch:").any():
-        tw = d[d.creator_key.str.startswith("twitch:")].drop_duplicates("creator_key")
-        acc = {r["handle"].lower(): r for r in db.query("SELECT * FROM platform_accounts WHERE platform='twitch'")}
-        rows = []
-        for _, r in tw.iterrows():
-            a = acc.get(r["handle"].lower(), {})
-            raw = json.loads(a.get("raw_json") or "{}")
-            rows.append({"Streamer": raw.get("name") or r["handle"], "Followers": a.get("followers"),
-                         "Main category": raw.get("game"), "Median VOD views": raw.get("median_vod_views"),
-                         "Last stream": (raw.get("last_stream_at") or "")[:10] or None,
-                         "Found via": r["query"], "Twitch": r["url"]})
-        g = pd.DataFrame(rows).sort_values("Followers", ascending=False, na_position="last")
-        with st.expander(f"Twitch streamers, no YouTube match ({len(g)}) — not ranked"):
-            st.caption("Real metrics from the official Twitch API, but no YouTube videos or comments to analyse — "
-                       "review manually. Sorted by followers, not a ranking.")
-            st.dataframe(g, hide_index=True, width="stretch", column_config={
-                "Twitch": st.column_config.LinkColumn(display_text="Open"),
-                "Followers": st.column_config.NumberColumn(format="%d"),
-                "Median VOD views": st.column_config.NumberColumn(format="%d")})
     if ctx["run_stats"]:
         with st.expander("Run statistics (external API usage)"):
             st.json(ctx["run_stats"])
@@ -1017,10 +1135,27 @@ def shortlist_page(ctx: dict, short: list[str]) -> None:
     rows = []
     for cid in short:
         vm = ctx["vms"].get(cid)
+        pvm = next((P["vms"][cid] for P in ctx["platforms"].values() if cid in P["vms"]), None)
         name = vm["name"] if vm else ctx["creators"].get(cid, {}).get("name", cid)
         with st.container(key=f"card-sl-{ui.key(cid)}"):
             a, b, c, d = st.columns([3.2, 1.2, 1.1, 1.1], vertical_alignment="center")
-            if vm:
+            if pvm:
+                pl = PLATFORMS[pvm["platform"]]
+                a.markdown(f'<div class="pn-card-head">{ui.avatar(pvm["name"], pvm["avatar"])}<div class="who">'
+                           f'<div class="name">{esc(pvm["name"])}</div><div class="meta">'
+                           f'{ui.platform_icon(pvm["platform"], 12)} {pl} · {ui.fmt_count(pvm["followers"])} followers'
+                           f'</div><div style="margin-top:6px">'
+                           f'{ui.confidence_badge(pvm["conf"], pvm["conf_label"])}</div></div></div>',
+                           unsafe_allow_html=True)
+                b.markdown(f'<div class="pn-scorewrap" style="justify-content:flex-end">{ui.tier_badge(pvm["tier"])}'
+                           f'{ui.score_block(pvm["score"])}</div>', unsafe_allow_html=True)
+                if pvm["url"]:
+                    c.link_button("Open", pvm["url"], width="stretch")
+                rows.append({"creator": pvm["name"], "platform": pl, "rank": pvm["rank"], "cost_proxy_eur": None,
+                             "campaign_score": pvm["score"], "data_confidence": round(pvm["conf"], 2),
+                             "subscribers": pvm["followers"], "median_relevant_views": None,
+                             "channel_url": pvm["url"], "reasons": "; ".join(pvm["reasons"])})
+            elif vm:
                 a.markdown(f'<div class="pn-card-head">{ui.avatar(name, vm["avatar"])}<div class="who">'
                            f'<div class="name">{esc(name)}</div><div class="meta">{ui.platform_icon("youtube", 12)} YouTube · '
                            f'{esc(COUNTRY.get(vm["country"], vm["country"]) + " · " if vm["country"] else "")}'
@@ -1031,7 +1166,7 @@ def shortlist_page(ctx: dict, short: list[str]) -> None:
                 b.markdown(f'<div class="pn-scorewrap" style="justify-content:flex-end">{ui.tier_badge(vm["tier"])}'
                            f'{ui.score_block(vm["score"])}</div>', unsafe_allow_html=True)
                 c.button("View", key=f"slv_{cid}", on_click=go, args=("analysis", cid), width="stretch")
-                rows.append({"creator": name, "rank": vm["rank"], "cost_proxy_eur": vm["cost"], "campaign_score": vm["score"], "data_confidence": round(vm["conf"], 2),
+                rows.append({"creator": name, "platform": "YouTube", "rank": vm["rank"], "cost_proxy_eur": vm["cost"], "campaign_score": vm["score"], "data_confidence": round(vm["conf"], 2),
                              "subscribers": vm["subs"], "median_relevant_views": vm["median_views"],
                              "channel_url": vm["url"], "reasons": "; ".join(vm["reasons"])})
             else:
@@ -1042,10 +1177,14 @@ def shortlist_page(ctx: dict, short: list[str]) -> None:
     if rows:
         spec = ctx["spec"]
         lines = [f"Creator shortlist — {spec.product} ({COUNTRY.get(spec.target_country, spec.target_country)})", ""]
-        for r in sorted(rows, key=lambda r: r["rank"]):
-            cost = f"≈ €{ui.fmt_count(r['cost_proxy_eur'])}/video" if r["cost_proxy_eur"] else "cost n/a"
-            lines.append(f"#{r['rank']} {r['creator']} — score {r['campaign_score']}/100 · "
-                         f"{ui.fmt_count(r['subscribers'])} subs · {cost}")
+        order = {p: i for i, p in enumerate(PLATFORMS.values())}
+        for r in sorted(rows, key=lambda r: (order[r["platform"]], r["rank"])):
+            if r["platform"] == "YouTube":
+                cost = f"≈ €{ui.fmt_count(r['cost_proxy_eur'])}/video" if r["cost_proxy_eur"] else "cost n/a"
+                size = f"{ui.fmt_count(r['subscribers'])} subs · {cost}"
+            else:
+                size = f"{ui.fmt_count(r['subscribers'])} followers"
+            lines.append(f"{r['platform']} #{r['rank']} {r['creator']} — score {r['campaign_score']}/100 · {size}")
             if r["reasons"]:
                 lines.append(f"   Why: {r['reasons']}")
             if r["channel_url"]:
