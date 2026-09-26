@@ -231,30 +231,31 @@ def build_context(campaign: dict) -> dict:
 
 
 # ------------------------------------------------------------------ chrome
-def top_nav(n_short: int, campaign: dict | None, ctx_name: str | None = None) -> None:
-    """Logo + breadcrumb (where am I: Campaigns › campaign › creator) and a cart-style shortlist.
-    Campaigns is home, not a peer of Creators/Shortlist, so there is no three-item nav."""
+def top_nav(n_short: int, campaign: dict | None) -> None:
+    """Logo + breadcrumb of the parent levels + a cart-style shortlist. The current level is the band's title
+    (campaign name, "Shortlist") or the creator header, so the breadcrumb never repeats it."""
     inside = campaign is not None and ss.view != "campaign"
-    left, right = st.columns([5, 1.1], vertical_alignment="center")
+    left, right = st.columns([5, 1.2], vertical_alignment="center")
     with left, st.container(horizontal=True, vertical_alignment="center", gap="small", key="crumbs"):
         html(ui.brand_header())
         if inside:
-            spec = CampaignSpec.model_validate_json(campaign["spec_json"])
-            label = f"{spec.product} · {spec.target_country}"
-            here = {"analysis": ctx_name, "shortlist": "Shortlist"}.get(ss.view)
-            sep = '<span class="pn-crumb-sep">›</span>'
             st.button("Campaigns", key="crumb_home", type="tertiary", on_click=go, args=("campaign",))
-            html(sep)
-            if here:
-                st.button(label, key="crumb_campaign", type="tertiary", on_click=go, args=("discover",),
-                          help=label)
-                html(sep + f'<span class="pn-crumb-here">{esc(here)}</span>')
-            else:
-                html(f'<span class="pn-crumb-here" title="{esc(label)}">{esc(label)}</span>')
+            if ss.view in ("analysis", "shortlist"):
+                spec = CampaignSpec.model_validate_json(campaign["spec_json"])
+                label = f"{spec.product} · {spec.target_country}"
+                html('<span class="pn-crumb-sep">›</span>')
+                st.button(label, key="crumb_campaign", type="tertiary", on_click=go, args=("discover",), help=label)
     if inside:
-        with right, st.container(key="cart-on" if ss.view == "shortlist" else "cart"):
+        with right, st.container(horizontal=True, horizontal_alignment="right",
+                                 key="cart-on" if ss.view == "shortlist" else "cart"):
             st.button(f"Shortlist ({n_short})" if n_short else "Shortlist", icon=":material/bookmark:",
-                      key="btn_cart", on_click=go, args=("shortlist",), width="stretch")
+                      key="btn_cart", on_click=go, args=("shortlist",))
+
+
+def band_title(title: str, chips: str = "", meta: str = "") -> None:
+    """Current page inside the green band: one title, then chips and counts on a single line."""
+    html(f'<div class="pn-band-title" role="heading" aria-level="1">{esc(title[:1].upper() + title[1:])}</div>'
+         f'<div class="pn-band-meta">{chips}<span class="pn-subtle">{esc(meta)}</span></div>')
 
 
 # ------------------------------------------------------------------ campaign page
@@ -584,13 +585,11 @@ def discover_page(ctx: dict, short: list[str]) -> None:
     spec, vms = ctx["spec"], ctx["vms"]
     analysed = len(ctx["feats"])
     with band:
-        html(f'<div class="pn-kicker">Creators</div><h2 style="margin:0 0 8px">{len(vms)} creators for '
-         f'{esc(spec.product)}</h2>'
-             + ui.chip(COUNTRY.get(spec.target_country, spec.target_country), dark=True) + ui.chip(ctx["lang"])
-             + (ui.chip(spec.price_segment) if spec.price_segment else "")
-             + ui.chip(f"Goal: {preset_of(spec, ctx['campaign']['id']).capitalize()}")
-             + f'<span class="pn-subtle" style="margin-left:6px">{analysed} analysed · '
-               f'{analysed - len(vms)} filtered out</span>')
+        band_title(spec.product,
+                   "".join(ui.chip(x) for x in [COUNTRY.get(spec.target_country, spec.target_country), ctx["lang"],
+                                                 spec.price_segment,
+                                                 f"Goal: {preset_of(spec, ctx['campaign']['id']).capitalize()}"] if x),
+                   f"{len(vms)} ranked · {analysed} analysed · {analysed - len(vms)} filtered out")
     f1, f2, f3, f4, f5, f6 = st.columns([1.4, 1.7, 1.1, 1.3, 1.2, 1.2], vertical_alignment="bottom")
     c = ctx["campaign"]["id"]  # filters survive a visit to a creator's analysis and back
     query = f1.text_input("Search", placeholder="Search creators", label_visibility="collapsed",
@@ -887,10 +886,9 @@ def analysis_page(ctx: dict, cid: str, short: list[str]) -> None:
 # ------------------------------------------------------------------ shortlist page
 def shortlist_page(ctx: dict, short: list[str]) -> None:
     with band:
-        html(f'<div class="pn-kicker">Shortlist</div><h2 style="margin:0 0 4px">{len(short)} creator'
-             f'{"s" if len(short) != 1 else ""} shortlisted</h2><div class="pn-muted">'
-             f'For {esc(ctx["spec"].product)} · '
-             f'{esc(COUNTRY.get(ctx["spec"].target_country, ctx["spec"].target_country))}</div>')
+        spec = ctx["spec"]
+        band_title("Shortlist", "", f"{len(short)} creator{'s' if len(short) != 1 else ''} for {spec.product} · "
+                                    f"{COUNTRY.get(spec.target_country, spec.target_country)}")
     if not short:
         ui.empty_state("Your shortlist is empty.", "Go back to the campaign and add creators with “+ Shortlist”.")
         return
@@ -948,9 +946,7 @@ current = next((c for c in campaigns if c["id"] == ss.campaign), None)
 short = shortlist_ids(current["id"]) if current else []
 band = st.container(key="band")  # deep-green top band: nav + the page's title; pages add their heading to it
 with band:
-    top_nav(len(short), current,
-            ctx_name=(db.query("SELECT name FROM creators WHERE id=?", (ss.get("creator"),)) or [{}])[0].get("name")
-            if ss.view == "analysis" else None)
+    top_nav(len(short), current)
 
 if ss.view == "campaign" or current is None:
     campaign_page(campaigns)

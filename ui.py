@@ -241,8 +241,6 @@ div[class*="st-key-crumb_campaign"] {{ min-width:0; max-width:300px; }}
 div[class*="st-key-crumb_campaign"] button {{ max-width:100%; }}
 div[class*="st-key-crumb_campaign"] button p {{ white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }}
 .pn-crumb-sep {{ color:{T['text_subtle']}; font-weight:600; margin:0 4px; }}
-.pn-crumb-here {{ font-weight:700; color:{T['text']}; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
-  max-width:280px; display:inline-block; vertical-align:middle; }}
 div[class*="st-key-cart"] button {{ border-radius:999px !important; }}
 div[class*="st-key-cart-on"] button {{ border-color:#256F50 !important; background:#EBFDEB !important; color:#256F50 !important; }}
 @media (max-width:900px) {{ div[class*="st-key-crumbs"] .pn-brand .product {{ display:none; }} }}
@@ -259,7 +257,9 @@ div[class*="st-key-band"] .pn-chip.dark {{ background:#9DF69A; border-color:#9DF
 div[class*="st-key-band"] .pn-hero-slim {{ background:transparent; padding:6px 0 0; margin:0; }}
 div[class*="st-key-band"] .stButton > button[kind="tertiary"] {{ color:#CFE9D6 !important; }}
 div[class*="st-key-band"] .stButton > button[kind="tertiary"]:hover {{ color:#9DF69A !important; }}
-div[class*="st-key-band"] .pn-crumb-here {{ color:#fff; }}
+div[class*="st-key-band"] .pn-band-title {{ font-family:'Sora',sans-serif; font-weight:700; color:#fff; line-height:1.2;
+  font-size:clamp(1.6rem,2.6vw,2.3rem); letter-spacing:-.02em; margin:22px 0 12px; }}
+div[class*="st-key-band"] .pn-band-meta {{ display:flex; flex-wrap:wrap; align-items:center; gap:6px 0; }}
 div[class*="st-key-band"] .pn-crumb-sep {{ color:#7CA996; }}
 div[class*="st-key-band"] div[class*="st-key-cart"] button {{ background:transparent !important; color:#fff !important;
   border-color:rgba(255,255,255,.45) !important; }}
