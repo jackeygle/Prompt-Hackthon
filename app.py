@@ -232,24 +232,26 @@ def build_context(campaign: dict) -> dict:
 
 # ------------------------------------------------------------------ chrome
 def top_nav(n_short: int, campaign: dict | None) -> None:
-    """Logo + breadcrumb of the parent levels + a cart-style shortlist. The current level is the band's title
-    (campaign name, "Shortlist") or the creator header, so the breadcrumb never repeats it."""
+    """Logo left, cart-style shortlist right; below it, on its own line above the page title, one back link to the
+    parent level (all campaigns, or the campaign). The current level is the title, so nothing is shown twice."""
     inside = campaign is not None and ss.view != "campaign"
     left, right = st.columns([5, 1.2], vertical_alignment="center")
-    with left, st.container(horizontal=True, vertical_alignment="center", gap="small", key="crumbs"):
+    with left:
         html(ui.brand_header())
-        if inside:
-            st.button("Campaigns", key="crumb_home", type="tertiary", on_click=go, args=("campaign",))
-            if ss.view in ("analysis", "shortlist"):
-                spec = CampaignSpec.model_validate_json(campaign["spec_json"])
-                label = f"{spec.product} · {spec.target_country}"
-                html('<span class="pn-crumb-sep">›</span>')
-                st.button(label, key="crumb_campaign", type="tertiary", on_click=go, args=("discover",), help=label)
     if inside:
         with right, st.container(horizontal=True, horizontal_alignment="right",
                                  key="cart-on" if ss.view == "shortlist" else "cart"):
             st.button(f"Shortlist ({n_short})" if n_short else "Shortlist", icon=":material/bookmark:",
                       key="btn_cart", on_click=go, args=("shortlist",))
+        with st.container(key="back"):
+            if ss.view in ("analysis", "shortlist"):
+                spec = CampaignSpec.model_validate_json(campaign["spec_json"])
+                label = f"{spec.product} · {spec.target_country}"
+                st.button(label, key="crumb_campaign", type="tertiary", icon=":material/arrow_back:",
+                          on_click=go, args=("discover",), help=f"Back to {label}")
+            else:
+                st.button("All campaigns", key="crumb_home", type="tertiary", icon=":material/arrow_back:",
+                          on_click=go, args=("campaign",))
 
 
 def band_title(title: str, chips: str = "", meta: str = "") -> None:
