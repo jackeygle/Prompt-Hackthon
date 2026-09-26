@@ -2,3 +2,5 @@
 __pycache__/
 *.pyc
 .venv/
+data/creator_intel.db*
+.pytest_cache/
