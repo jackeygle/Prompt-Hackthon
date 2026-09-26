@@ -420,7 +420,7 @@ def campaign_page(campaigns: list[dict]) -> None:
             else:
                 html(ui.steps(1))
                 campaign_form(ss.draft)
-    recent_campaigns(campaigns)
+    recent_campaigns(campaigns, overlap=slim)
 
 
 def campaign_form(draft: CampaignSpec) -> None:
@@ -487,7 +487,7 @@ def rel_time(iso: str) -> str:
     return f"{days} days ago" if days < 7 else f"{t:%d %b %Y}"
 
 
-def recent_campaigns(campaigns: list[dict], n_cols: int = 3) -> None:
+def recent_campaigns(campaigns: list[dict], n_cols: int = 3, overlap: bool = False) -> None:
     """Report history as a compact list: identity, key settings, size, age; open and delete per row."""
     if not campaigns:
         st.write("")
@@ -497,7 +497,8 @@ def recent_campaigns(campaigns: list[dict], n_cols: int = 3) -> None:
                                 (c["id"],))[0]["n"] for c in campaigns}
     empty = [c for c in campaigns if not counts[c["id"]]]
     shown = campaigns if ss.get("show_empty_reports") else [c for c in campaigns if counts[c["id"]]]
-    home = st.container(key="homecard")
+    # only the search-style home lifts the card over the band; elsewhere it must not cover the form above
+    home = st.container(key="homecard" if overlap else "histcard")
     home.markdown(f'<div class="pn-list-head"><span class="t">Recent campaigns</span>'
                   f'<span class="n">{len(shown)} report{"s" if len(shown) != 1 else ""}</span></div>',
                   unsafe_allow_html=True)

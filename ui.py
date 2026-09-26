@@ -301,7 +301,8 @@ div[class*="st-key-card-cr-"] {{ container-type:inline-size; }}  /* creator card
 /* top band: case-mesh perforation fading in from the right + lime accent strip at the bottom */
 div[class*="st-key-band"] {{ position:relative; }}
 div[class*="st-key-band"]::before {{ content:""; position:absolute; top:0; bottom:0; left:-100vmax; right:-100vmax;
-  pointer-events:none; background-image:radial-gradient(rgba(157,246,154,.22) 1.3px, transparent 1.6px);
+  pointer-events:none; animation:pnmesh 70s linear infinite;
+  background-image:radial-gradient(rgba(157,246,154,.22) 1.3px, transparent 1.6px);
   background-size:13px 13px; -webkit-mask-image:linear-gradient(90deg, transparent 52%, #000 88%);
   mask-image:linear-gradient(90deg, transparent 52%, #000 88%); }}
 div[class*="st-key-band"]::after {{ content:""; position:absolute; left:-100vmax; right:-100vmax; bottom:0; height:4px;
@@ -359,15 +360,15 @@ div[class*="st-key-card-cr-"] {{ padding-top:0 !important; overflow:hidden; bord
   transition:transform .15s ease, box-shadow .15s ease, border-color .15s ease; }}
 div[class*="st-key-card-cr-"]:hover {{ transform:translateY(-2px); border-color:var(--pn-green) !important;
   box-shadow:0 14px 30px rgba(29,29,53,.12); }}
-div[class*="st-key-card-cr-"] .pn-card-head {{ margin:0 -20px 4px; padding:18px 20px 16px; color:#fff;
-  background-color:var(--pn-navy); background-image:radial-gradient(rgba(157,246,154,.13) 1.2px, transparent 1.5px);
+div[class*="st-key-card-cr-"] .pn-card-head {{ margin:0 -20px 4px; padding:18px 20px 16px; color:var(--pn-navy);
+  background-color:#F1FBF3; background-image:radial-gradient(rgba(37,111,80,.10) 1.2px, transparent 1.5px);
   background-size:11px 11px; background-position:right top; border-bottom:3px solid var(--pn-lime); }}
-div[class*="st-key-card-cr-"] .pn-card-head .name {{ color:#fff; }}
-div[class*="st-key-card-cr-"] .pn-card-head .meta {{ color:#B9BACB; }}
-div[class*="st-key-card-cr-"] .pn-rank {{ color:var(--pn-lime); font-size:.68rem; white-space:nowrap; overflow:hidden;
+div[class*="st-key-card-cr-"] .pn-card-head .name {{ color:var(--pn-navy); }}
+div[class*="st-key-card-cr-"] .pn-card-head .meta {{ color:{T['text_muted']}; }}
+div[class*="st-key-card-cr-"] .pn-rank {{ color:var(--pn-green); font-size:.68rem; white-space:nowrap; overflow:hidden;
   text-overflow:ellipsis; margin-bottom:3px; }}
 div[class*="st-key-card-cr-"] .pn-card-head .name {{ font-size:1.05rem; }}
-div[class*="st-key-card-cr-"] .pn-avatar {{ border:2px solid rgba(157,246,154,.55); background-color:#2C2C4A; color:#DADAE6; }}
+div[class*="st-key-card-cr-"] .pn-avatar {{ border:2px solid #A8C5B9; background-color:#fff; color:var(--pn-green); }}
 div[class*="st-key-card-cr-"] .pn-score {{ background:var(--pn-lime); border:none; color:var(--pn-navy);
   padding:8px 10px; border-radius:12px; flex:none; }}
 div[class*="st-key-card-cr-"] .pn-score .num {{ font-size:1.7rem; }}
@@ -385,24 +386,22 @@ div[class*="st-key-card-cr-"] .pn-score .lbl {{ color:var(--pn-navy); opacity:.7
 .pn-tier.lg {{ width:46px; font-size:1.6rem; border-radius:12px; }}
 .pn-tier.t-s {{ background:var(--pn-lime); color:var(--pn-navy); box-shadow:inset 0 0 0 2px #7BE278; }}
 .pn-tier.t-a {{ background:var(--pn-green); color:#fff; }}
-.pn-tier.t-b {{ background:transparent; color:#DADAE6; box-shadow:inset 0 0 0 2px #6E6E8A; }}
-.pn-tier.t-c {{ background:transparent; color:#8B8BA3; box-shadow:inset 0 0 0 2px #4A4A63; }}
-div[class*="st-key-panel-head"] .pn-tier.t-b, div[class*="st-key-card-sl-"] .pn-tier.t-b {{ color:var(--pn-navy);
-  box-shadow:inset 0 0 0 2px var(--pn-navy); }}
-div[class*="st-key-panel-head"] .pn-tier.t-c, div[class*="st-key-card-sl-"] .pn-tier.t-c {{ color:#777786;
-  box-shadow:inset 0 0 0 2px #A9AABC; }}
-.pn-boot {{ background:var(--pn-navy); border-radius:16px; padding:18px 20px; font-family:var(--pn-mono);
-  font-size:.86rem; color:#B9BACB; background-image:radial-gradient(rgba(157,246,154,.08) 1.1px, transparent 1.4px);
+.pn-tier.t-b {{ background:#fff; color:var(--pn-green); box-shadow:inset 0 0 0 2px var(--pn-green); }}
+.pn-tier.t-c {{ background:#fff; color:#777786; box-shadow:inset 0 0 0 2px #A9AABC; }}
+
+.pn-boot {{ background:#F1FBF3; border:1px solid #CFE9D6; border-radius:16px; padding:18px 20px; font-family:var(--pn-mono);
+  font-size:.86rem; color:{T['text_muted']}; background-image:radial-gradient(rgba(37,111,80,.08) 1.1px, transparent 1.4px);
   background-size:11px 11px; border-bottom:3px solid var(--pn-lime); }}
-.pn-boot .hd {{ color:var(--pn-lime); font-weight:700; letter-spacing:.06em; font-size:.74rem; margin-bottom:10px; }}
+.pn-boot .hd {{ color:var(--pn-green); font-weight:700; letter-spacing:.06em; font-size:.74rem; margin-bottom:10px; }}
 .pn-boot .ln {{ display:flex; gap:12px; align-items:baseline; padding:4px 0; white-space:nowrap; }}
 .pn-boot .tag {{ flex:none; width:52px; white-space:pre; }}
-.pn-boot .ok .tag {{ color:var(--pn-lime); font-weight:700; }}
-.pn-boot .ok .s {{ color:#E6E6EF; }}
-.pn-boot .run .tag, .pn-boot .run .s {{ color:#fff; font-weight:700; }}
-.pn-boot .wait {{ color:#5E5E78; }}
-.pn-boot .d {{ color:#9DA0B8; overflow:hidden; text-overflow:ellipsis; }}
-.pn-boot .cur {{ color:var(--pn-lime); animation:pnblink 1s steps(1) infinite; }}
+.pn-boot .ok .tag {{ color:var(--pn-green); font-weight:700; }}
+.pn-boot .ok .s {{ color:var(--pn-navy); }}
+.pn-boot .run .tag, .pn-boot .run .s {{ color:var(--pn-navy); font-weight:700; }}
+.pn-boot .run {{ background:#E2F8E4; border-radius:8px; margin:0 -8px; padding:4px 8px; }}
+.pn-boot .wait {{ color:#A9AABC; }}
+.pn-boot .d {{ color:{T['text_muted']}; overflow:hidden; text-overflow:ellipsis; }}
+.pn-boot .cur {{ color:var(--pn-green); animation:pnblink 1s steps(1) infinite; }}
 @keyframes pnblink {{ 50% {{ opacity:0; }} }}
 /* ===== home: centered search hero, bar with the CTA inside, report card overlapping the band ===== */
 div[class*="st-key-band"] .pn-hero-slim.pn-center {{ text-align:center; padding:34px 0 14px; }}
@@ -452,10 +451,14 @@ div[class*="st-key-band"]:has(div[class*="st-key-briefbar"])::before {{
   -webkit-mask-image:linear-gradient(90deg, #000 0%, transparent 32%, transparent 68%, #000 100%);
   mask-image:linear-gradient(90deg, #000 0%, transparent 32%, transparent 68%, #000 100%); }}
 /* report card lifts over the band's bottom edge */
-div[class*="st-key-homecard"] {{ position:relative; z-index:2; margin-top:-88px; background:#fff; border-radius:22px;
+div[class*="st-key-homecard"], div[class*="st-key-histcard"] {{ position:relative; background:#fff; border-radius:22px;
   padding:20px 22px 14px; box-shadow:0 16px 40px rgba(29,29,53,.10); border:1px solid {T['border']}; }}
-div[class*="st-key-homecard"] div[class*="st-key-reportlist"] {{ border:none; border-radius:0; padding:0; }}
-div[class*="st-key-homecard"] div[class*="st-key-row-camp-"] {{ border-radius:12px; }}
+div[class*="st-key-homecard"] {{ z-index:2; margin-top:-88px; }}
+div[class*="st-key-histcard"] {{ margin-top:18px; }}
+div[class*="st-key-homecard"] div[class*="st-key-reportlist"], div[class*="st-key-histcard"] div[class*="st-key-reportlist"] {{
+  border:none; border-radius:0; padding:0; }}
+div[class*="st-key-homecard"] div[class*="st-key-row-camp-"], div[class*="st-key-histcard"] div[class*="st-key-row-camp-"] {{
+  border-radius:12px; }}
 /* home only: brand mint washes down from the band into the page */
 [data-testid="stMain"]:has(div[class*="st-key-homecard"]) {{
   background:linear-gradient(180deg, #EBFDEB 0px, #F2FBF4 420px, {T['bg']} 900px); }}
@@ -467,13 +470,13 @@ div[class*="st-key-homecard"] div[class*="st-key-row-camp-"] {{ border-radius:12
 /* ===== step 3: rings, sparklines, entrance and feedback motion (first render only; off with reduced motion) ===== */
 @property --pp {{ syntax:'<number>'; inherits:false; initial-value:0; }}
 .pn-ring {{ --pp:var(--p); width:74px; height:74px; border-radius:50%; flex:none; display:grid; place-items:center;
-  background:conic-gradient(var(--pn-lime) calc(var(--pp) * 1%), rgba(157,246,154,.16) 0);
+  background:conic-gradient(var(--pn-green) calc(var(--pp) * 1%), #D9EFE0 0);
   animation:pnring 1s cubic-bezier(.2,.8,.2,1) both; }}
 @keyframes pnring {{ from {{ --pp:0; }} }}
-.pn-ring-in {{ width:60px; height:60px; border-radius:50%; background:var(--pn-navy); display:flex; flex-direction:column;
+.pn-ring-in {{ width:60px; height:60px; border-radius:50%; background:#fff; display:flex; flex-direction:column;
   align-items:center; justify-content:center; line-height:1; }}
-.pn-ring .num {{ font-family:var(--pn-mono); font-weight:700; font-size:1.45rem; color:#fff; letter-spacing:-.04em; }}
-.pn-ring .lbl {{ font-size:.44rem; font-weight:700; letter-spacing:.12em; color:var(--pn-lime); text-transform:uppercase;
+.pn-ring .num {{ font-family:var(--pn-mono); font-weight:700; font-size:1.45rem; color:var(--pn-navy); letter-spacing:-.04em; }}
+.pn-ring .lbl {{ font-size:.44rem; font-weight:700; letter-spacing:.12em; color:var(--pn-green); text-transform:uppercase;
   margin-top:3px; }}
 .pn-spark {{ margin:2px 0 8px; }}
 .pn-spark .k {{ font-size:.64rem; font-weight:700; letter-spacing:.07em; text-transform:uppercase; color:{T['text_muted']};
@@ -515,28 +518,13 @@ div[class*="st-key-briefbar"]:has(textarea:placeholder-shown) .stFormSubmitButto
 div[class*="st-key-briefbar"]:has(textarea:not(:placeholder-shown)) .stFormSubmitButton button {{
   animation:pnready .5s ease-out 1; }}
 @keyframes pnready {{ 40% {{ transform:scale(1.05); }} }}
-div[class*="st-key-briefbar"] .stTextArea textarea::placeholder {{ color:transparent !important;
-  -webkit-text-fill-color:transparent !important; }}
-div[class*="st-key-briefbar"] [data-testid="stColumn"]:first-child {{ position:relative; }}
-div[class*="st-key-briefbar"]:has(textarea:placeholder-shown) [data-testid="stColumn"]:first-child::after {{
-  content:"Describe your campaign…"; position:absolute; left:15px; top:50%; transform:translateY(-50%);
-  pointer-events:none; color:#8B8E93; font-size:1.02rem; white-space:nowrap; overflow:hidden; max-width:calc(100% - 24px);
-  text-overflow:ellipsis; animation:pnhint 16s linear infinite; }}
-@keyframes pnhint {{
-  0%, 22% {{ content:"Describe your campaign…"; opacity:1; }}
-  24% {{ opacity:0; }}
-  25%, 47% {{ content:"e.g. Gaming PCs under €800 in Sweden"; opacity:1; }}
-  49% {{ opacity:0; }}
-  50%, 72% {{ content:"e.g. RTX 4070 PCs for streamers in Finland"; opacity:1; }}
-  74% {{ opacity:0; }}
-  75%, 97% {{ content:"e.g. Refurbished PCs for budget gamers in Germany"; opacity:1; }}
-  99% {{ opacity:0; }}
-}}
 /* card head: ring replaces the lime block */
 div[class*="st-key-card-cr-"] .pn-scorewrap {{ align-items:center; }}
 @media (prefers-reduced-motion:reduce) {{ .pn-ring, .pn-spark rect, .pn-bar .fill, div[class*="st-key-card-cr-"],
   .pn-tier.t-s::after, div[class*="st-key-cart"] button {{ animation:none !important; }}
-  div[class*="st-key-briefbar"] [data-testid="stColumn"]:first-child::after {{ animation:none !important; }} }}
+}}
+@keyframes pnmesh {{ to {{ background-position:130px 65px; }} }}
+@media (prefers-reduced-motion:reduce) {{ div[class*="st-key-band"]::before {{ animation:none !important; }} }}
 </style>""", unsafe_allow_html=True)
 
 
