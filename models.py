@@ -55,6 +55,20 @@ class WebCreatorMentions(BaseModel):
     creators: list[WebCreatorMention]
 
 
+class WebSearchCreator(BaseModel):
+    """A creator nominated by ChatGPT web search (verified later against official APIs)."""
+    name: str
+    platform: str = "unknown"
+    handle: str | None = None
+    profile_url: str | None = None
+    source_url: str | None = None
+    evidence: str | None = None
+
+
+class WebSearchCreators(BaseModel):
+    creators: list[WebSearchCreator] = []
+
+
 # ---------- Visual analysis (VLM) ----------
 class ImageTags(BaseModel):
     i: int = Field(description="Index of the image in the input order")

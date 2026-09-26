@@ -216,7 +216,8 @@ def build_context(campaign: dict) -> dict:
         other_followers = ({p: int(n) for p, n in zip(acc.platform, acc.followers) if p != "youtube" and pd.notna(n)}
                            if not acc.empty else {})
         d = discoveries[discoveries.creator_key == c] if not discoveries.empty else pd.DataFrame()
-        web_platforms = sorted(set(d[d.source == "tavily_web"].platform)) if not d.empty else []
+        web_platforms = (sorted(set(d[d.source.isin(["openai_web", "tavily_web"])].platform))
+                         if not d.empty else [])
         def absolute(names, scale):
             vals = [f[k] for k in names if f.get(k) is not None]
             return 100 * sum(vals) / len(vals) / scale if vals else None
@@ -345,7 +346,7 @@ def stage_index(msg: str) -> int:
         return 0
     if m.startswith("youtube search") or m.startswith("loading"):
         return 1
-    if m.startswith("web search") or m.startswith("merging"):
+    if m.startswith("web search") or m.startswith("merging") or m.startswith("twitch"):
         return 2
     if m.startswith("cheap filter") or m.startswith("screening"):
         return 3

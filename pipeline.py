@@ -105,6 +105,7 @@ def run_campaign(brief: str, spec: CampaignSpec | None = None, seed_handles: lis
     yt.QuotaUsage.units = 0
     yt.TranscriptStatus.reset()
     web.TavilyUsage.calls = 0
+    web.OpenAISearchUsage.calls = 0
     twitch.TwitchUsage.calls = 0
     instagram.InstagramUsage.calls = 0
     errors: list[str] = []
@@ -146,7 +147,7 @@ def run_campaign(brief: str, spec: CampaignSpec | None = None, seed_handles: lis
     p(f"Loading {len(hits)} channels", 0.13)
     chans = {c["id"]: c for c in yt.channels(list(hits))}
 
-    # 2b. Web / cross-platform discovery (Tavily). Optional: failures leave YouTube-only discovery intact.
+    # 2b. Web / cross-platform discovery (ChatGPT web search, or Tavily). Optional: failures leave YouTube-only discovery intact.
     web_matches: dict[str, list[dict]] = {}
     web_only: list[dict] = []
     identities: list[dict] = []
@@ -417,7 +418,7 @@ def run_campaign(brief: str, spec: CampaignSpec | None = None, seed_handles: lis
             _save_instagram_account(ip, None)
         db.executemany("INSERT INTO discoveries (campaign_id, creator_key, source, platform, handle, query, url,"
                        " evidence, method) VALUES (?,?,?,?,?,?,?,?,?)",
-                       [(campaign_id, key, "tavily_web", s_["platform"], w["profiles"].get(s_["platform"]) or w["name"],
+                       [(campaign_id, key, s_.get("source", "tavily_web"), s_["platform"], w["profiles"].get(s_["platform"]) or w["name"],
                          s_["query"], s_["source_url"], s_["evidence"], s_["method"]) for s_ in w["sources"]])
 
     # Twitch / Instagram candidates (ranked per platform); accounts keep any link to a YouTube creator made above
@@ -455,7 +456,8 @@ def run_campaign(brief: str, spec: CampaignSpec | None = None, seed_handles: lis
     stats = {
         "duration_s": round(time.time() - t0, 1),
         "youtube_quota_units": yt.QuotaUsage.units,
-        "tavily_calls": web.TavilyUsage.calls,
+        "web_search_provider": web.provider() if config.WEB_DISCOVERY_ENABLED else None,
+        "openai_web_search_calls": web.OpenAISearchUsage.calls, "tavily_calls": web.TavilyUsage.calls,
         "twitch_calls": twitch.TwitchUsage.calls, "twitch_profiles": len(twitch_profiles),
         "twitch_matched_channels": len(twitch_matched), "twitch_only_creators": len(twitch_only),
         "instagram_calls": instagram.InstagramUsage.calls, "instagram_profiles": len(ig_profiles),
@@ -467,14 +469,14 @@ def run_campaign(brief: str, spec: CampaignSpec | None = None, seed_handles: lis
         "creators_analysed": len(results), "vlm_failures": vlm_failures[:10],
         "disabled_models": llm_dead_models(),
         "missing_env": sorted(set(llm_missing_keys(config.LLM_MODELS) + llm_missing_keys(config.VLM_MODELS)
-                                  + ([] if config.TAVILY_API_KEY else ["TAVILY_API_KEY"])
+                                  + ([] if web.provider() else ["OPENAI_API_KEY or TAVILY_API_KEY"])
                                   + ([] if twitch.available() else ["TWITCH_CLIENT_ID", "TWITCH_CLIENT_SECRET"])
                                   + ([] if instagram.available() else ["INSTAGRAM_ACCESS_TOKEN"]))),
         "errors": errors[:20],
     }
     db.execute("INSERT OR REPLACE INTO run_stats VALUES (?,?)", (campaign_id, json.dumps(stats)))
     p(f"Done: {len(results)} creators analysed · {llm.calls} text-LLM calls ({llm.cache_hits} cached) · "
-      f"{vlm.calls} VLM calls · {web.TavilyUsage.calls} Tavily calls · {twitch.TwitchUsage.calls} Twitch calls · ~{yt.QuotaUsage.units} YouTube quota units",
+      f"{vlm.calls} VLM calls · {web.OpenAISearchUsage.calls} ChatGPT web searches · {web.TavilyUsage.calls} Tavily calls · {twitch.TwitchUsage.calls} Twitch calls · ~{yt.QuotaUsage.units} YouTube quota units",
       1.0)
     return campaign_id
 

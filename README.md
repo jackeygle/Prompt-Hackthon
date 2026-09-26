@@ -1,6 +1,6 @@
 # Creator Intelligence Engine (hackathon MVP)
 
-Campaign brief → Groq structured extraction → **human review/edit** → YouTube + Tavily web + Twitch discovery →
+Campaign brief → Groq structured extraction → **human review/edit** → YouTube + ChatGPT web search + Twitch discovery →
 identity merge → YouTube data collection → text / comment / thumbnail (VLM) features → hard filter →
 **AHP + TOPSIS** → explainable Streamlit dashboard.
 
@@ -12,7 +12,7 @@ reported next to a separate **Data Confidence** score.
 
 ```bash
 pip install -r requirements.txt
-cp .env.example .env        # YOUTUBE_API_KEY + GROQ_API_KEY required; TAVILY/OPENAI/GEMINI/TWITCH/INSTAGRAM optional
+cp .env.example .env        # YOUTUBE_API_KEY + GROQ_API_KEY required; OPENAI/TAVILY/GEMINI/TWITCH/INSTAGRAM optional
 streamlit run app.py        # Campaign → Continue → confirm details → Find creators → Discover → View analysis
                             # → Shortlist.
 # or headless:
@@ -28,7 +28,8 @@ python check_setup.py      # one tiny request per API: shows exactly which keys/
 | Brief → `CampaignSpec` (+ audience interests, YouTube and web queries) | `pipeline.parse_brief` | Groq | 1 call; subscriber range and price only when stated in the brief, otherwise marked defaults (`field_sources`) |
 | Campaign settings (review / edit) | `app.campaign_form` | – | market, language, price, audience + interests, goal, subscriber range, **creators to analyse (5/10/20/50, default 10)**, searches, seeds |
 | YouTube search (market / language, last 12 months) | `youtube.py` | YouTube | 100 quota units per query |
-| Web discovery | `web_discovery.discover` | Tavily + Groq | 6 basic searches (general + `site:` TikTok/Instagram/Twitch/YouTube); profile URLs parsed deterministically; 1 LLM call extracts creator names from articles (names must appear in the cited result) |
+| Web discovery (default) | `web_discovery.discover_openai` | OpenAI Responses API + `web_search` tool (`WEB_SEARCH_MODEL`, default gpt-4.1-mini) | 3 searches (YouTube / TikTok+Instagram / Twitch focus), ChatGPT only **nominates**: each nomination needs a profile URL (parsed deterministically) or a source URL it actually cited, otherwise it is dropped; all are verified later via the official APIs |
+| Web discovery (alternative) | `web_discovery.discover_tavily` | Tavily + Groq | `WEB_SEARCH_PROVIDER=tavily`, or automatic fallback when ChatGPT finds nothing / has no key: 6 basic searches (general + `site:` TikTok/Instagram/Twitch/YouTube); profile URLs parsed deterministically; 1 LLM call extracts creator names from articles (names must appear in the cited result) |
 | Twitch discovery | `twitch.discover` | Twitch Helix (free) | live streams in the target language in audience-interest categories + top games + Science & Technology; live channel search; Tavily-found Twitch handles verified. ≤30 profiles: follower total, main category, median VOD views, last stream; follower range from spec |
 | Identity merge / dedup | `web_discovery.resolve_to_youtube` | YouTube | handles/channel IDs/normalised names → YouTube channels (≤25 `forHandle` lookups); unmatched Twitch/Instagram accounts go to their platform ranking, the rest → *web-only* list (not ranked) |
 | Cheap filter | `pipeline.run_campaign` | – | subscriber range from spec, country in market if declared; screens max(20, 2×creators) channels (≤100) by search hits + 2×web mentions |
@@ -76,7 +77,7 @@ Missing values are imputed with the unfavourable quartile and lower confidence; 
 
 | Missing / failing | Behaviour |
 |---|---|
-| `TAVILY_API_KEY` / Tavily down | YouTube-only discovery; error listed in run statistics |
+| `OPENAI_API_KEY` missing / ChatGPT web search fails | Tavily (if `TAVILY_API_KEY`), else YouTube-only discovery; errors in run statistics |
 | `GROQ_API_KEY` / Groq down or rate-limited | falls back along `LLM_MODELS` (Gemini) |
 | `TWITCH_CLIENT_ID/SECRET` / Twitch down | no Twitch discovery or metrics; listed in run statistics |
 | `INSTAGRAM_ACCESS_TOKEN` missing / expired | no Instagram numbers; token errors listed in run statistics (`check_setup.py` flags an expired token) |

@@ -61,3 +61,44 @@ def test_missing_key_falls_back_to_next_model(monkeypatch, tmp_path):
     assert client.extract(Out, "s", "u").x == 7
     assert "groq/test-model" in llm._limiter.dead
     assert llm.missing_keys(["groq/a"]) == ["GROQ_API_KEY"]
+
+
+def test_chatgpt_web_search_keeps_only_verifiable_nominations(monkeypatch, tmp_path):
+    import db
+    db.use(tmp_path / "t.db")
+    monkeypatch.setattr(web.config, "OPENAI_API_KEY", "k")
+    text = ('{"creators": ['
+            '{"name": "PC Max", "platform": "youtube", "profile_url": "https://www.youtube.com/@PCMaxTV", '
+            '"source_url": "https://blog.example/list", "evidence": "PC Max tests budget PCs"},'
+            '{"name": "Kalle", "platform": "twitch", "handle": "kalle", "profile_url": null, '
+            '"source_url": "https://news.example/streamer?utm=1", "evidence": "Kalle streams CS2"},'
+            '{"name": "Made Up", "platform": "tiktok", "handle": "madeup", "profile_url": null, '
+            '"source_url": "https://not-cited.example", "evidence": "?"}]}')
+
+    class R:
+        status_code = 200
+
+        @staticmethod
+        def json():
+            return {"output": [{"type": "web_search_call"}, {"type": "message", "content": [
+                {"type": "output_text", "text": "```json\n" + text + "\n```", "annotations": [
+                    {"type": "url_citation", "url": "https://news.example/streamer"}]}]}]}
+
+    monkeypatch.setattr(web.requests, "post", lambda *a, **k: R())
+    spec = CampaignSpec(product="gaming PCs", product_keywords=[], niche="PC gaming", target_country="DE",
+                        target_language="de", audience="gamers", goal="conversion", search_queries=["q"])
+    ids, errors = web.discover_openai(spec)
+    got = {(i["platform"], i["handle"]) for i in ids}
+    assert ("youtube", "PCMaxTV") in got      # profile URL parsed deterministically
+    assert ("twitch", "kalle") in got         # cited source (query string ignored)
+    assert not any(h == "madeup" for _, h in got)  # uncited, no profile URL -> dropped
+    assert all(i["source"] == "openai_web" for i in ids) and errors == []
+
+
+def test_provider_falls_back_to_available_key(monkeypatch):
+    monkeypatch.setattr(web.config, "WEB_SEARCH_PROVIDER", "openai")
+    monkeypatch.setattr(web.config, "OPENAI_API_KEY", "")
+    monkeypatch.setattr(web.config, "TAVILY_API_KEY", "t")
+    assert web.provider() == "tavily"
+    monkeypatch.setattr(web.config, "TAVILY_API_KEY", "")
+    assert web.provider() is None

@@ -64,8 +64,13 @@ MIN_TARGET_LANG_SHARE = 0.3  # share of comments in the target language (audienc
 
 ASSUMED_CPM_EUR = 20.0      # ASSUMED CPM for the cost proxy. Not a creator quote; shown as such in the UI.
 
-# Web discovery (Tavily). basic search = 1 credit; dev tier ~1,000 credits/month.
+# Web discovery: ChatGPT web search (OpenAI Responses API, web_search tool) by default, Tavily as alternative/fallback.
 WEB_DISCOVERY_ENABLED = os.getenv("WEB_DISCOVERY_ENABLED", "1") == "1"
+WEB_SEARCH_PROVIDER = os.getenv("WEB_SEARCH_PROVIDER", "openai")   # "openai" | "tavily"
+WEB_SEARCH_MODEL = os.getenv("WEB_SEARCH_MODEL", "gpt-4.1-mini")   # must support the web_search tool
+OPENAI_SEARCH_CALLS = 3        # YouTube / TikTok+Instagram / Twitch focus, one search-enabled call each
+OPENAI_SEARCH_CREATORS = 15    # nominations requested per call
+# Tavily: basic search = 1 credit; dev tier ~1,000 credits/month.
 TAVILY_MAX_QUERIES = 6
 TAVILY_RESULTS_PER_QUERY = 10
 MAX_WEB_HANDLE_LOOKUPS = 25  # channels.list forHandle lookups (1 quota unit each)

@@ -2,7 +2,7 @@
 
     python check_setup.py
 
-Cost: ~2 YouTube quota units, 1 Tavily credit, 3 free Twitch calls, 2 Instagram Graph calls, 1 tiny Groq call, 1 tiny OpenAI vision call.
+Cost: ~2 YouTube quota units, 1 ChatGPT web search (or 1 Tavily credit), 3 free Twitch calls, 2 Instagram Graph calls, 1 tiny Groq call, 1 tiny OpenAI vision call.
 """
 import os
 import sys
@@ -92,6 +92,25 @@ def check_llm_calls():
             report("OpenAI vision call", FAIL, str(e)[:160])
 
 
+def check_web_search():
+    import web_discovery as web
+    which = web.provider()
+    if which is None:
+        report("Web search", WARN, "no OPENAI_API_KEY / TAVILY_API_KEY → YouTube-only discovery")
+    elif which == "openai":
+        try:
+            data, cited = web.openai_web_search(
+                'Use web search. Name one German PC hardware YouTuber. Answer only JSON: {"creators": '
+                '[{"name": "...", "profile_url": "..."}]}')
+            names = [c.get("name") for c in data.get("creators", [])]
+            report("ChatGPT web search", OK, f"{config.WEB_SEARCH_MODEL}: {names[:1]} · {len(cited)} cited sources")
+        except Exception as e:
+            report("ChatGPT web search", FAIL, str(e)[:160]
+                   + (" → set WEB_SEARCH_MODEL to a model with web search" if "400" in str(e) else ""))
+    else:
+        check_tavily()
+
+
 def check_tavily():
     if not config.TAVILY_API_KEY:
         return
@@ -152,7 +171,7 @@ if __name__ == "__main__":
     check_chain("Groq", "https://api.groq.com/openai/v1", config.GROQ_API_KEY, config.LLM_MODELS, "groq")
     check_chain("OpenAI", "https://api.openai.com/v1", config.OPENAI_API_KEY, config.VLM_MODELS, "openai")
     check_llm_calls()
-    check_tavily()
+    check_web_search()
     check_twitch()
     check_instagram()
     check_transcripts()
