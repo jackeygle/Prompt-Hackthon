@@ -1,6 +1,6 @@
 """Prenew Creator Intelligence: Streamlit front-end.
 
-Campaign → Discover (ranked creator cards) → Creator analysis (why + evidence) → Shortlist.
+Campaign → Creators (ranked creator cards) → Creator analysis (why + evidence) → Shortlist.
 Presentation only: discovery, feature extraction and AHP/TOPSIS ranking live in pipeline.py / ranking.py.
 
 Run:  streamlit run app.py
@@ -70,12 +70,13 @@ REASON = {
     "spam_ratio": ("Clean, low-spam comments", "Noticeable spam in comments"),
     "days_since_last_relevant": ("Recently active on the topic", "Not recently active on the topic"),
 }
-EVIDENCE_KIND = {"audience_relevance": "Audience relevance", "niche_relevance": "Niche relevance", "product_relevance": "Product evidence",
+EVIDENCE_KIND = {"audience_relevance": "Audience relevance", "niche_relevance": "Niche relevance", "product_relevance": "Product relevance",
                  "price_segment_relevance": "Price-segment evidence", "first_hand_experience": "Hands-on evidence",
                  "benchmark_discussion": "Test & results evidence", "price_discussion": "Price evidence",
                  "product_comparison": "Comparison evidence", "purchase_recommendation": "Buying-advice evidence"}
 COMMENT_LABEL = {"purchase_intent": "Purchase intent", "technical": "In-depth / expert", "question": "Question",
                  "meaningful": "Meaningful", "generic": "Generic", "spam": "Suspicious / spam"}
+GROUP_ORDER = {g: i for i, g in enumerate(ranking.GROUPS)}  # fit → credibility → community → reach → cost
 CRITERION_UI_LABEL = {"benchmark_discussion": "Tests & measurable results",
                       "technical_question_ratio": "In-depth / question comments",
                       "log_est_cost_eur": "Estimated cost proxy (assumed CPM, log)"}
@@ -151,6 +152,7 @@ def build_context(campaign: dict) -> dict:
     res = ranking.topsis(df, weights) if ok_ids else pd.DataFrame(columns=["score", "rank"])
     used = res.attrs.get("weights", {})
     lang = LANG.get(spec.target_language, spec.target_language.upper())
+    budget = ss.get(f"budget_{cid_c}", spec.budget_per_video)
 
     def meta(c):
         return json.loads(stored.get(c, {}).get("breakdown_json") or "{}")
@@ -160,15 +162,19 @@ def build_context(campaign: dict) -> dict:
         f = feats[c]
         n_imp = sum(bool(res.loc[c, f"imputed__{k}"]) for k in used)
         conf = ranking.confidence(f, n_imp)
+        n_vid, n_com = int(f.get("n_analyzed_videos") or 0), int(f.get("n_classified_comments") or 0)
         groups = {}
         for g in ranking.GROUPS:
             ks = [k.name for k in ranking.CRITERIA if k.group == g and k.name in used]
             wsum = sum(used[k] for k in ks)
             groups[g] = 100 * sum(used[k] * res.loc[c, f"close__{k}"] for k in ks) / wsum if wsum else None
-        ex = ranking.explain(res.loc[c], used, k=4)
-        good = [REASON[s["criterion"]][0].format(lang=lang) for s in ex["strengths"]
-                if s["closeness"] >= 0.6 and s["criterion"] in REASON][:3]
-        gaps = [REASON[s["criterion"]][1].format(lang=lang) for s in ex["gaps"]
+        ex = ranking.explain(res.loc[c], used, k=len(used))
+        # fit before reach before cost: a creator is never "recommended because cheap"
+        fit_first = sorted((s for s in ex["strengths"] if s["closeness"] >= 0.6 and s["criterion"] in REASON),
+                           key=lambda s: (GROUP_ORDER[ranking.CRITERION_BY_NAME[s["criterion"]].group],
+                                          -s["weight"] * s["closeness"]))
+        good = [REASON[s["criterion"]][0].format(lang=lang) for s in fit_first][:3]
+        gaps = [REASON[s["criterion"]][1].format(lang=lang) for s in ex["gaps"][:4]
                 if s["closeness"] <= 0.35 and s["criterion"] in REASON][:3]
         acc = accounts[accounts.creator_id == c] if not accounts.empty else pd.DataFrame()
         yt_row = acc[acc.platform == "youtube"].iloc[0] if not acc.empty and (acc.platform == "youtube").any() else None
@@ -180,15 +186,22 @@ def build_context(campaign: dict) -> dict:
             vals = [f[k] for k in names if f.get(k) is not None]
             return 100 * sum(vals) / len(vals) / scale if vals else None
 
+        bars = {label: absolute(names, scale) for label, names, scale in CARD_BARS + [EVIDENCE_BAR]}
+        conf_label = ranking.confidence_label(conf)
+        # "High" must not sit next to empty evidence: no comments or 2+ unmeasured signals caps it at Medium
+        if conf_label == "High" and (n_com == 0 or sum(v is None for v in bars.values()) >= 2):
+            conf_label = "Medium"
+        cost = f.get("est_cost_eur")
         vms[c] = {
-            "bars": {label: absolute(names, scale) for label, names, scale in CARD_BARS + [EVIDENCE_BAR]},
+            "bars": bars, "basis": f"{n_vid} video{'s' if n_vid != 1 else ''} · {n_com} comments",
+            "over_budget": bool(budget and cost and cost > budget),
             "engagement": f.get("engagement_rate"), "n_relevant": f.get("n_relevant_videos"),
             "n_analyzed": f.get("n_analyzed_videos"),
             "id": c, "name": creators.get(c, {}).get("name", c), "rank": int(res.loc[c, "rank"]),
-            "score": round(100 * float(res.loc[c, "score"])), "conf": conf, "conf_label": ranking.confidence_label(conf),
+            "score": round(100 * float(res.loc[c, "score"])), "conf": conf, "conf_label": conf_label,
             "subs": f.get("subscribers"), "median_views": f.get("median_relevant_views"),
             "purchase_intent": f.get("purchase_intent_ratio"), "lang_share": f.get("target_lang_share"),
-            "cost": f.get("est_cost_eur"), "country": creators.get(c, {}).get("country"),
+            "cost": cost, "country": creators.get(c, {}).get("country"),
             "avatar": raw.get("thumbnail"), "url": yt_row["url"] if yt_row is not None else None,
             "niche": meta(c).get("niche_label", ""), "summary": meta(c).get("summary", ""),
             "videos": meta(c).get("videos", []), "groups": groups, "reasons": good, "gaps": gaps,
@@ -204,22 +217,31 @@ def build_context(campaign: dict) -> dict:
                         and v["score"] >= med_score)
     return {"campaign": campaign, "spec": spec, "feats": feats, "res": res, "weights": weights, "used": used,
             "group_w": gw, "passed": passed, "vms": vms, "creators": creators, "discoveries": discoveries,
-            "run_stats": run_stats, "lang": lang}
+            "run_stats": run_stats, "lang": lang, "budget": budget}
 
 
 # ------------------------------------------------------------------ chrome
-def top_nav(n_short: int, has_campaign: bool) -> None:
-    left, *navs = st.columns([5.2, 1.05, 1.05, 1.25], vertical_alignment="center")
-    with left:
-        html(ui.brand_header())
+def top_nav(n_short: int, campaign: dict | None) -> None:
+    left, *navs = st.columns([4.4, 1.25, 1.25, 1.45], vertical_alignment="center")
     current = "discover" if ss.view == "analysis" else ss.view
-    for col, (view, label) in zip(navs, [("campaign", "Campaign"), ("discover", "Discover"),
-                                         ("shortlist", f"Shortlist · {n_short}")]):
+    with left:
+        context = ""
+        if campaign and current != "campaign":  # which report am I in? (easy to lose on the analysis page)
+            spec = CampaignSpec.model_validate_json(campaign["spec_json"])
+            where = COUNTRY.get(spec.target_country, spec.target_country)
+            context = (f'<div class="pn-context" title="{esc(spec.product)} · {esc(where)}"><span class="k">Campaign'
+                       f'</span><span class="v">{esc(spec.product)}</span><span class="m">{esc(where)}</span></div>')
+        html(f'<div class="pn-navbar">{ui.brand_header()}{context}</div>')
+    # a flow, not tabs: numbered steps, ✓ once a step is behind you, shortlist count only when there is one
+    done = {"campaign": campaign is not None, "discover": n_short > 0, "shortlist": False}
+    steps = [("campaign", "1", "Campaign"), ("discover", "2", "Creators"),
+             ("shortlist", "3", f"Shortlist ({n_short})" if n_short else "Shortlist")]
+    for col, (view, num, name) in zip(navs, steps):
         with col:
             k = ("navon-" if current == view else "nav-") + view
             with st.container(key=k):
-                st.button(label, key=f"btn_{k}", on_click=go, args=(view,), use_container_width=True,
-                          disabled=(view != "campaign" and not has_campaign))
+                st.button(f"{'✓' if done[view] else num} · {name}", key=f"btn_{k}", on_click=go, args=(view,),
+                          width="stretch", disabled=(view != "campaign" and campaign is None))
     html('<div class="pn-divider" style="margin:6px 0 22px"></div>')
 
 
@@ -286,7 +308,8 @@ def _submit_settings() -> None:
         target_country=g("country").strip().upper(), target_language=g("lang").strip().lower(), goal=g("goal"),
         audience=g("audience"), audience_interests=commas("interests"), product_keywords=commas("keywords"),
         search_queries=lines("yt_q"), web_queries=lines("web_q"), min_subscribers=int(g("min_subscribers")),
-        max_subscribers=int(g("max_subscribers")), n_creators=int(g("n_creators")), field_sources=sources)
+        max_subscribers=int(g("max_subscribers")), n_creators=int(g("n_creators")),
+        budget_per_video=int(g("budget") or 0), field_sources=sources)
     ss.run_request = (spec, ss.get("draft_brief", DEFAULT_BRIEF), commas("seeds"))
 
 
@@ -298,17 +321,26 @@ def cost_estimate(n: int) -> str:
 
 
 def campaign_page(campaigns: list[dict]) -> None:
-    hero, form = st.columns([1, 1.1], gap="large")
-    with hero:
-        html('<div class="pn-hero"><div class="pn-kicker">Prenew Creator Intelligence</div>'
-             '<h1>Find the creators our gamers already watch.</h1>'
-             '<p>Describe the campaign. We find, evaluate and rank relevant gaming and tech creators — '
-             'with the evidence behind every recommendation.</p>'
-             '<div class="pn-hero-proof"><span>01 · Discover</span><span>02 · Compare</span>'
-             '<span>03 · Shortlist</span></div></div>')
+    running = ss.pop("run_request", None)
+    parse = ss.pop("parse_request", None)
+    # returning users with reports: the pitch shrinks to one line and their reports come first
+    slim = bool(campaigns) and not running and not parse and ss.get("draft") is None
+    if slim:
+        html('<div class="pn-hero-slim"><span class="t">Find the creators our gamers already watch.</span>'
+             '<span class="p">01 · Brief → 02 · Creators → 03 · Shortlist</span></div>')
+        reports, form = st.columns([1.7, 1], gap="large")
+        with reports:
+            recent_campaigns(campaigns, n_cols=2)
+    else:
+        hero, form = st.columns([1, 1.1], gap="large")
+        with hero:
+            html('<div class="pn-hero"><div class="pn-kicker">Prenew Creator Intelligence</div>'
+                 '<h1>Find the creators our gamers already watch.</h1>'
+                 '<p>Describe the campaign. We find, evaluate and rank relevant gaming and tech creators — '
+                 'with the evidence behind every recommendation.</p>'
+                 '<div class="pn-hero-proof"><span>01 · Brief</span><span>02 · Creators</span>'
+                 '<span>03 · Shortlist</span></div></div>')
     with form:
-        running = ss.pop("run_request", None)
-        parse = ss.pop("parse_request", None)
         with st.container(key="panel-campaign"):
             if parse:
                 try:
@@ -329,19 +361,20 @@ def campaign_page(campaigns: list[dict]) -> None:
                     st.error(f"Discovery failed: {e}")
                 return
             if ss.get("draft") is None:
-                html(ui.steps(0) + '<div class="pn-kicker">Campaign brief</div>')
+                html(ui.steps(0) + f'<div class="pn-kicker">{"New campaign" if slim else "Campaign brief"}</div>')
                 with st.form("brief_form", border=False):
                     st.text_area("Campaign brief", value="", height=150, placeholder="Describe your campaign…",
                                  label_visibility="collapsed", key="campaign_brief_v2")
                     if ss.pop("brief_error", False):
                         st.warning("Describe your campaign before continuing.")
                     html(f'<div class="pn-subtle" style="margin:-4px 0 12px">{esc(BRIEF_EXAMPLES)}</div>')
-                    st.form_submit_button("Continue →", type="primary", use_container_width=True,
+                    st.form_submit_button("Continue →", type="primary", width="stretch",
                                           on_click=_submit_brief)
             else:
                 html(ui.steps(1))
                 campaign_form(ss.draft)
-    recent_campaigns(campaigns)
+    if not slim:
+        recent_campaigns(campaigns)
 
 
 def campaign_form(draft: CampaignSpec) -> None:
@@ -360,13 +393,15 @@ def campaign_form(draft: CampaignSpec) -> None:
         st.text_input("Target audience", draft.audience, key=k + "audience")
         st.text_input("Audience interests (what they watch)" + tag("audience_interests"),
                       ", ".join(draft.audience_interests), key=k + "interests")
-        a, b, c = st.columns(3)
+        a, b, c, d = st.columns(4)
         goals = ["conversion", "awareness", "balanced"]
         a.selectbox("Goal", goals, index=goals.index(draft.goal), key=k + "goal", format_func=str.capitalize)
         b.number_input("Min subscribers" + tag("min_subscribers"), 0, 100_000_000, draft.min_subscribers,
                        step=1000, key=k + "min_subscribers")
         c.number_input("Max subscribers" + tag("max_subscribers"), 0, 100_000_000, draft.max_subscribers,
                        step=100_000, key=k + "max_subscribers")
+        d.number_input("Budget per video (€)", 0, 10_000_000, draft.budget_per_video, step=500, key=k + "budget",
+                       help="0 = no limit. Creators above it are flagged, not removed.")
         opts = config.N_CREATOR_OPTIONS
         st.segmented_control("Creators to analyse", opts, default=draft.n_creators if draft.n_creators in opts
                              else config.DEFAULT_N_CREATORS, key=k + "n_creators", required=True)
@@ -386,12 +421,12 @@ def campaign_form(draft: CampaignSpec) -> None:
         if missing:
             html(f'<div class="pn-note">Missing keys (skipped): {esc(", ".join(missing))}</div>')
         back, go_btn = st.columns([1, 2])
-        back.form_submit_button("← Edit brief", use_container_width=True, on_click=_discard_draft)
-        go_btn.form_submit_button("Create campaign →", type="primary", use_container_width=True,
+        back.form_submit_button("← Edit brief", width="stretch", on_click=_discard_draft)
+        go_btn.form_submit_button("Create campaign →", type="primary", width="stretch",
                                   on_click=_submit_settings)
 
 
-def recent_campaigns(campaigns: list[dict]) -> None:
+def recent_campaigns(campaigns: list[dict], n_cols: int = 3) -> None:
     st.write("")
     head, src = st.columns([3, 2], vertical_alignment="bottom")
     head.markdown("#### Recent campaigns")
@@ -404,20 +439,29 @@ def recent_campaigns(campaigns: list[dict]) -> None:
     if not campaigns:
         ui.empty_state("No campaigns yet.", "Describe a campaign above to find creators.")
         return
-    cols = st.columns(3)
-    for i, c in enumerate(campaigns):
-        col = cols[i % 3]
+    counts = {c["id"]: db.query("SELECT COUNT(*) n FROM rankings WHERE campaign_id=? AND passed_hard_filter=1",
+                                (c["id"],))[0]["n"] for c in campaigns}
+    empty = [c for c in campaigns if not counts[c["id"]]]
+    shown = campaigns if ss.get("show_empty_reports") else [c for c in campaigns if counts[c["id"]]]
+    cols = st.columns(n_cols)
+    for i, c in enumerate(shown):
         spec = CampaignSpec.model_validate_json(c["spec_json"])
-        n = db.query("SELECT COUNT(*) n FROM rankings WHERE campaign_id=? AND passed_hard_filter=1", (c["id"],))[0]["n"]
-        with col, st.container(key=f"card-camp-{ui.key(c['id'])}"):
-            html(f'<div class="pn-subtle">{esc(c["created_at"][:16].replace("T", " "))} · {n} creators</div>'
+        n = counts[c["id"]]
+        with cols[i % n_cols], st.container(key=f"card-camp-{ui.key(c['id'])}"):
+            html(f'<div class="pn-subtle">{esc(c["created_at"][:16].replace("T", " "))} · '
+                 f'{n} creator{"s" if n != 1 else ""}</div>'
                  f'<div style="font-weight:650;margin:4px 0 8px">{esc(spec.product)}</div>'
                  + ui.chip(COUNTRY.get(spec.target_country, spec.target_country))
                  + (ui.chip(spec.price_segment) if spec.price_segment else "") + ui.chip(spec.goal.capitalize()))
-            st.button("Open →", key=f"open_{c['id']}", on_click=lambda i=c["id"]: (
-                ss.update(campaign=i, view="discover", creator=None)), use_container_width=True)
-            if st.button("Delete report", key=f"delete_{c['id']}", type="tertiary"):
-                confirm_delete(c["id"], spec.product, ss.source)
+            open_col, menu = st.columns([4, 1], vertical_alignment="center")
+            open_col.button("Open →", key=f"open_{c['id']}", on_click=lambda i=c["id"]: (
+                ss.update(campaign=i, view="discover", creator=None)), width="stretch",
+)
+            with menu.popover("⋯", width="stretch"):
+                if st.button("Delete report", key=f"delete_{c['id']}", type="tertiary"):
+                    confirm_delete(c["id"], spec.product, ss.source)
+    if empty:
+        st.toggle(f"Show reports without results ({len(empty)})", key="show_empty_reports")
 
 
 @st.dialog("Delete this report?")
@@ -425,9 +469,9 @@ def confirm_delete(campaign_id: str, product: str, source: str) -> None:
     st.write(f'This will permanently remove the saved report for “{product}”.')
     st.caption("Other reports and their creator data will be kept.")
     cancel, delete = st.columns(2)
-    if cancel.button("Cancel", use_container_width=True):
+    if cancel.button("Cancel", width="stretch"):
         st.rerun()
-    if delete.button("Delete", type="primary", use_container_width=True):
+    if delete.button("Delete", type="primary", width="stretch"):
         if ss.source != source:
             st.error("The data source changed. Close this dialog and select the report again.")
             return
@@ -440,31 +484,51 @@ def confirm_delete(campaign_id: str, product: str, source: str) -> None:
 
 # ------------------------------------------------------------------ discover page
 def creator_card(vm: dict, ctx: dict, shortlisted: bool) -> None:
-    lang = ctx["lang"]
-    with st.container(key=f"card-{ui.key(vm['id'])}"):
-        badges = ui.confidence_badge(vm["conf"], vm["conf_label"]) + (" " + ui.gem_badge() if vm["gem"] else "")
+    """Commerce-style card: score, confidence, three key figures, one reason. Details live on the analysis page
+    and side-by-side numbers in Compare."""
+    with st.container(key=f"card-cr-{ui.key(vm['id'])}"):
+        badges = (ui.confidence_badge(vm["conf"], vm["conf_label"], basis=vm["basis"])
+                  + (" " + ui.gem_badge() if vm["gem"] else "") + (" " + ui.budget_badge() if vm["over_budget"] else ""))
         loc = COUNTRY.get(vm["country"], vm["country"]) if vm["country"] else ""
         stats = "".join([
             ui.stat_tile("Subscribers", ui.fmt_count(vm["subs"])),
             ui.stat_tile("Median views", ui.fmt_count(vm["median_views"])),
-            ui.stat_tile("Engagement", ui.pct1(vm["engagement"])),
-            ui.stat_tile("Relevant videos", "–" if vm["n_relevant"] is None else f"{vm['n_relevant']:.0f}"),
-            ui.stat_tile("Purchase intent", ui.pct(vm["purchase_intent"])),
-            ui.stat_tile(f"{lang} comments", ui.pct(vm["lang_share"])),
+            ui.stat_tile("Cost proxy", f"€{ui.fmt_count(vm['cost'])}" if vm["cost"] else "–",
+                         hint=f"Per video: median views × assumed €{config.ASSUMED_CPM_EUR:.0f} CPM, not a quote"),
         ])
-        bars = "".join(ui.metric_bar(label, vm["bars"].get(label), accent=(label == "Audience relevance"))
-                       for label, _, _ in CARD_BARS)
-        reasons = ui.reasons_list(vm["reasons"]) if vm["reasons"] else ""
+        reason = ui.reasons_list(vm["reasons"][:1]) if vm["reasons"] else ""
         html(f'<div class="pn-card-head">{ui.avatar(vm["name"], vm["avatar"])}<div class="who">'
-             f'<div class="pn-rank">#{vm["rank"]} · YouTube{" · " + esc(loc) if vm["country"] else ""}</div>'
+             f'<div class="pn-rank">#{vm["rank"]} · YouTube{" · " + esc(loc) if loc else ""}</div>'
              f'<div class="name" title="{esc(vm["name"])}">{esc(vm["name"])}</div>'
              f'<div class="meta">{esc(vm["niche"])}</div></div>{ui.score_block(vm["score"])}</div>'
-             f'<div style="margin:10px 0 2px">{badges}</div><div class="pn-stats three">{stats}</div>{bars}{reasons}')
+             f'<div style="margin:10px 0 2px">{badges}</div><div class="pn-stats three">{stats}</div>{reason}')
         a, b = st.columns(2)
         a.button("View analysis", key=f"view_{vm['id']}", type="primary", on_click=go, args=("analysis", vm["id"]),
-                 use_container_width=True)
-        b.button("✓ Shortlisted" if shortlisted else "+ Shortlist", key=f"sl_{vm['id']}", use_container_width=True,
+                 width="stretch")
+        b.button("✓ Shortlisted" if shortlisted else "+ Shortlist", key=f"sl_{vm['id']}", width="stretch",
                  on_click=toggle_shortlist, args=(ctx["campaign"]["id"], vm["id"]))
+
+
+def top_picks(ctx: dict) -> None:
+    """One-line verdict before the grid: best fit, best reach, best value (within budget when one is set)."""
+    vms = list(ctx["vms"].values())
+    if len(vms) < 2:
+        return
+    pool = [v for v in vms if not v["over_budget"]] or vms  # recommend what the budget allows
+    fit = max(pool, key=lambda v: (v["groups"].get("Campaign Fit") or 0, v["score"]))
+    reach = max(pool, key=lambda v: v["median_views"] or 0)
+    priced = [v for v in pool if v["cost"]]
+    value = max(priced, key=lambda v: v["score"] / v["cost"]) if priced else None
+    picks = [("Best fit", fit, f"Campaign fit {fit['groups'].get('Campaign Fit') or 0:.0f}/100 · score {fit['score']}"),
+             ("Best reach", reach, f"{ui.fmt_count(reach['median_views'])} median views on relevant videos")]
+    if value:
+        picks.append(("Best value", value, f"Score {value['score']} for ≈ €{ui.fmt_count(value['cost'])} per video"))
+    for col, (label, vm, detail) in zip(st.columns(len(picks), gap="medium"), picks):
+        with col, st.container(key=f"panel-pick-{ui.key(label)}"):
+            html(f'<div class="pn-pick"><div class="k">{label}</div><div class="n">{esc(vm["name"])}</div>'
+                 f'<div class="d">{esc(detail)}</div></div>')
+            st.button("View analysis →", key=f"pick_{ui.key(label)}", type="tertiary", on_click=go,
+                      args=("analysis", vm["id"]))
 
 
 def compare_table(items: list[dict], ctx: dict, short: list[str]) -> None:
@@ -479,7 +543,7 @@ def compare_table(items: list[dict], ctx: dict, short: list[str]) -> None:
         f"{lang} comments %": None if v["lang_share"] is None else 100 * v["lang_share"],
         "Covers": v["niche"], "★": "✓" if v["id"] in short else ""} for v in items])
     bar = lambda: st.column_config.ProgressColumn(format="%.0f", min_value=0, max_value=100)
-    st.dataframe(df, hide_index=True, use_container_width=True, height=min(36 * (len(df) + 1) + 4, 640),
+    st.dataframe(df, hide_index=True, width="stretch", height=min(36 * (len(df) + 1) + 4, 640),
                  column_config={
                      "Score": st.column_config.NumberColumn(format="%d"),
                      "Subscribers": st.column_config.NumberColumn(format="compact"),
@@ -497,10 +561,17 @@ def compare_table(items: list[dict], ctx: dict, short: list[str]) -> None:
         st.rerun()
 
 
-def weights_controls(spec: CampaignSpec) -> None:
+def weights_controls(spec: CampaignSpec, campaign_id: str) -> None:
     presets = list(ranking.AHP_PRESETS)
     ss.setdefault("preset", spec.goal)
-    with st.popover("Ranking priorities", use_container_width=True):
+    store, widget = f"budget_{campaign_id}", f"budget_in_{campaign_id}"  # widget keys vanish on other pages
+    ss.setdefault(store, spec.budget_per_video)
+    ss[widget] = ss[store]
+    with st.popover("Ranking priorities", width="stretch"):
+        st.number_input("Budget per video (€, 0 = no limit)", 0, 10_000_000, step=500, key=widget,
+                        on_change=lambda: ss.update({store: ss[widget]}),
+                        help="Creators whose cost proxy is above this are flagged and listed last. "
+                             "The campaign score does not change.")
         st.segmented_control("Campaign goal", presets, key="preset", format_func=str.capitalize)
         w, cr = ranking.ahp_weights(ranking.AHP_PRESETS[ss.preset])
         st.caption(f"AHP pairwise preset · consistency ratio {cr:.3f} {'(consistent)' if cr <= 0.1 else '(> 0.1!)'}")
@@ -513,14 +584,14 @@ def weights_controls(spec: CampaignSpec) -> None:
 def discover_page(ctx: dict, short: list[str]) -> None:
     spec, vms = ctx["spec"], ctx["vms"]
     analysed = len(ctx["feats"])
-    html(f'<div class="pn-kicker">Discover</div><h2 style="margin:0 0 8px">{len(vms)} creators for '
+    html(f'<div class="pn-kicker">Creators</div><h2 style="margin:0 0 8px">{len(vms)} creators for '
          f'{esc(spec.product)}</h2>'
          + ui.chip(COUNTRY.get(spec.target_country, spec.target_country), dark=True) + ui.chip(ctx["lang"])
          + (ui.chip(spec.price_segment) if spec.price_segment else "")
          + ui.chip(f"Goal: {ss.get('preset', spec.goal).capitalize()}")
          + f'<span class="pn-subtle" style="margin-left:6px">{analysed} analysed · '
            f'{analysed - len(vms)} filtered out</span>')
-    f1, f2, f3, f4, f5, f6 = st.columns([1.5, 1.25, 1.0, 1.25, 1.2, 1.1], vertical_alignment="bottom")
+    f1, f2, f3, f4, f5, f6 = st.columns([1.4, 1.7, 1.1, 1.3, 1.2, 1.2], vertical_alignment="bottom")
     query = f1.text_input("Search", placeholder="Search creators", label_visibility="collapsed")
     conf_filter = f2.segmented_control("Confidence", ["All", "Medium+", "High"], default="All",
                                        label_visibility="collapsed")
@@ -529,7 +600,7 @@ def discover_page(ctx: dict, short: list[str]) -> None:
                                  "Subscribers", "Data confidence"], label_visibility="collapsed")
     layout = f5.segmented_control("View", ["Cards", "Compare"], default="Cards", label_visibility="collapsed")
     with f6:
-        weights_controls(spec)
+        weights_controls(spec, ctx["campaign"]["id"])
 
     items = sorted(vms.values(), key=lambda v: v["rank"])
     if query:
@@ -545,6 +616,7 @@ def discover_page(ctx: dict, short: list[str]) -> None:
               "Subscribers": lambda v: -(v["subs"] or 0), "Data confidence": lambda v: -v["conf"]}.get(sort)
     if key_fn:
         items.sort(key=key_fn)
+    items.sort(key=lambda v: v["over_budget"])  # stable: keeps the chosen order, over-budget creators last
 
     st.write("")
     if not vms:
@@ -555,6 +627,8 @@ def discover_page(ctx: dict, short: list[str]) -> None:
     elif layout == "Compare":
         compare_table(items, ctx, short)
     else:
+        top_picks(ctx)
+        st.write("")
         for i in range(0, len(items), 3):
             cols = st.columns(3, gap="medium")
             for col, vm in zip(cols, items[i:i + 3]):
@@ -580,19 +654,33 @@ def method_section(ctx: dict) -> None:
         vms = list(ctx["vms"].values())
         if vms:
             dfc = pd.DataFrame([{"Creator": v["name"], "Rank": v["rank"], "Campaign score": v["score"],
-                                 "Data confidence": round(100 * v["conf"])} for v in vms])
-            ch = alt.Chart(dfc).mark_circle(size=90, color=T["text"]).encode(
-                x=alt.X("Data confidence:Q", scale=alt.Scale(zero=False, padding=15)),
-                y=alt.Y("Campaign score:Q", scale=alt.Scale(zero=False, padding=15)),
-                tooltip=["Rank", "Creator", "Campaign score", "Data confidence"])
-            st.caption("Top-left: strong fit, thin data — verify manually.")
-            st.altair_chart(ch + ch.mark_text(dx=9, align="left", fontSize=10).encode(text="Rank:O"),
-                            use_container_width=True)
+                                 "Data confidence": round(100 * v["conf"]), "Level": v["conf_label"]} for v in vms])
+            x = alt.X("Data confidence:Q", scale=alt.Scale(domain=[0, 100]))  # absolute scale: no false spread
+            y = alt.Y("Campaign score:Q", scale=alt.Scale(zero=False, padding=28))
+            levels = list(ui.CONFIDENCE_STYLE)
+            dots = alt.Chart(dfc).mark_circle(size=110, opacity=0.9).encode(
+                x=x, y=y, tooltip=["Rank", "Creator", "Campaign score", "Data confidence"],
+                color=alt.Color("Level:N", title="Data confidence", legend=alt.Legend(orient="bottom"),
+                                scale=alt.Scale(domain=levels, range=[ui.CONFIDENCE_STYLE[l][1] for l in levels])))
+            ranks = alt.Chart(dfc).mark_text(dx=9, align="left", fontSize=11, color=T["text"]).encode(
+                x=x, y=y, text="Rank:O")
+            rule = dict(strokeDash=[4, 4], color=T["border_strong"])
+            medians = (alt.Chart(pd.DataFrame({"Data confidence": [dfc["Data confidence"].median()]}))
+                       .mark_rule(**rule).encode(x=x)
+                       + alt.Chart(pd.DataFrame({"Campaign score": [dfc["Campaign score"].median()]}))
+                       .mark_rule(**rule).encode(y=y))
+            corner = lambda text, xv, align: alt.Chart(pd.DataFrame(
+                {"Data confidence": [xv], "Campaign score": [dfc["Campaign score"].max()], "t": [text]})).mark_text(
+                align=align, dy=-18, fontSize=11, fontWeight="bold", color=T["text_muted"]).encode(x=x, y=y, text="t:N")
+            corners = (corner("← Verify manually", 0, "left")
+                       + corner("Safe bets →", 100, "right"))
+            st.caption("Dashed lines = median. Top-left: strong fit, thin data — verify manually.")
+            st.altair_chart(medians + corners + dots + ranks, width="stretch")
     excluded = [(ctx["creators"].get(c, {}).get("name", c), r) for c, (p, r) in ctx["passed"].items() if not p]
     if excluded:
         with st.expander(f"Excluded by hard filters ({len(excluded)})"):
             st.dataframe(pd.DataFrame(excluded, columns=["Creator", "Reason"]), hide_index=True,
-                         use_container_width=True)
+                         width="stretch")
     d = ctx["discoveries"]
     if not d.empty and d.creator_key.str.startswith("web:").any():
         wo = d[d.creator_key.str.startswith("web:")]
@@ -601,7 +689,7 @@ def method_section(ctx: dict) -> None:
             Mentions=("url", "count"), Evidence=("evidence", "first"), Source=("url", "first"))
         with st.expander(f"Found on web & social, no YouTube match ({len(g)}) — not ranked"):
             st.caption("No YouTube metrics available — review manually.")
-            st.dataframe(g.sort_values("Mentions", ascending=False), hide_index=True, use_container_width=True,
+            st.dataframe(g.sort_values("Mentions", ascending=False), hide_index=True, width="stretch",
                          column_config={"Source": st.column_config.LinkColumn()})
     if ctx["run_stats"]:
         with st.expander("Run statistics (external API usage)"):
@@ -639,16 +727,17 @@ def analysis_page(ctx: dict, cid: str, short: list[str]) -> None:
     with st.container(key="panel-head"):
         left, mid, right = st.columns([3.2, 1.2, 1.4], vertical_alignment="center")
         with left:
-            loc = COUNTRY.get(vm["country"], vm["country"]) if vm["country"] else "country not declared"
+            loc = COUNTRY.get(vm["country"], vm["country"]) if vm["country"] else ""
             links = "".join(ui.chip(f"{p}: @{h}") for p, h in vm["others"].items())
             name = f'<a href="{esc(vm["url"])}" target="_blank" style="text-decoration:none">{esc(vm["name"])}</a>' \
                 if vm["url"] else esc(vm["name"])
             html(f'<div class="pn-card-head">{ui.avatar(vm["name"], vm["avatar"], large=True)}<div class="who">'
                  f'<div class="pn-rank">#{vm["rank"]} OF {len(ctx["vms"])}</div>'
                  f'<div style="font-size:1.9rem;font-weight:800;letter-spacing:-.03em">{name}</div>'
-                 f'<div class="meta">YouTube · {esc(loc)} · {esc(vm["niche"])}</div>'
-                 f'<div style="margin-top:8px">{ui.confidence_badge(vm["conf"], vm["conf_label"])}'
-                 f'{" " + ui.gem_badge() if vm["gem"] else ""}</div>'
+                 f'<div class="meta">{" · ".join(esc(x) for x in ["YouTube", loc, vm["niche"]] if x)}</div>'
+                 f'<div style="margin-top:8px">{ui.confidence_badge(vm["conf"], vm["conf_label"], basis=vm["basis"])}'
+                 f'{" " + ui.gem_badge() if vm["gem"] else ""}'
+                 f'{" " + ui.budget_badge() if vm["over_budget"] else ""}</div>'
                  f'<div style="margin-top:8px">{links}</div></div></div>')
         with mid:
             html(ui.score_block(vm["score"], "Campaign score", xl=True))
@@ -661,7 +750,7 @@ def analysis_page(ctx: dict, cid: str, short: list[str]) -> None:
                  + "</div>")
             sl = cid in short
             st.button("✓ Shortlisted" if sl else "+ Add to shortlist", type="secondary" if sl else "primary",
-                      on_click=toggle_shortlist, args=(campaign_id, cid), use_container_width=True, key="sl_detail")
+                      on_click=toggle_shortlist, args=(campaign_id, cid), width="stretch", key="sl_detail")
     conf_line = (f"Based on {int(f.get('n_analyzed_videos', 0))} relevant videos · "
                  f"{int(f.get('n_classified_comments', 0))} comments · transcripts "
                  f"{f.get('transcript_coverage', 0):.0%} · {int(f.get('n_visual_images', 0))} thumbnails")
@@ -699,7 +788,7 @@ def analysis_page(ctx: dict, cid: str, short: list[str]) -> None:
         vdf["Published"] = vdf["published_at"].str[:10]
         st.dataframe(vdf[["title", "views", "Engagement %", "comments", "Published", "Video"]].rename(
             columns={"title": "Title", "views": "Views", "comments": "Comments"}), hide_index=True,
-            use_container_width=True, column_config={
+            width="stretch", column_config={
                 "Views": st.column_config.NumberColumn(format="compact"),
                 "Engagement %": st.column_config.NumberColumn(format="%.1f"),
                 "Video": st.column_config.LinkColumn(display_text="Open ↗")})
@@ -714,6 +803,7 @@ def analysis_page(ctx: dict, cid: str, short: list[str]) -> None:
     cards = []
     if not ev.empty:
         ok = ev[ev.verified == 1].copy()
+        ok = ok[ok.feature.map(lambda x: f.get(x) is None or f.get(x) > 0)]  # a quote cannot back a score of 0
         ok["w"] = ok.feature.map(lambda x: ctx["used"].get(x, 0))
         for _, r in ok.sort_values("w", ascending=False).drop_duplicates("quote").head(6).iterrows():
             cards.append(ui.evidence_card(EVIDENCE_KIND.get(r.feature, r.feature.replace("_", " ")), f"“{r.quote}”",
@@ -723,9 +813,10 @@ def analysis_page(ctx: dict, cid: str, short: list[str]) -> None:
                   (campaign_id, cid))
     for r in vt[:2]:
         t = json.loads(r["tags_json"])
-        tags = [lbl for k, lbl in [("product_category_visible", "Product visible"), ("product_demo", "Hands-on demo"),
-                                   ("benchmark_or_screen_content", "Results / on-screen"),
-                                   ("face_visible", "Creator on camera")] if t.get(k)]
+        in_focus = t.get("product_category_visible") and t.get("focus") in ("product", "mixed")
+        tags = (["Campaign product in view"] if in_focus else []) + [
+            lbl for k, lbl in [("product_demo", "Hands-on demo"), ("benchmark_or_screen_content", "Results / on-screen"),
+                               ("face_visible", "Creator on camera")] if t.get(k)]
         cards.append(ui.evidence_card("Visual evidence · thumbnail", t.get("note", ""),
                                       f"Video: {titles.get(r['video_id'], r['video_id'])}",
                                       f"https://youtu.be/{r['video_id']}", tags, image=r["url"]))
@@ -779,7 +870,7 @@ def analysis_page(ctx: dict, cid: str, short: list[str]) -> None:
                             "Weight": used.get(c.name, 0.0),
                             "Imputed": bool(res.loc[cid, f"imputed__{c.name}"]) if c.name in used else False,
                             "Source": pipeline._method(c.name)} for c in ranking.CRITERIA])
-        st.dataframe(bd, hide_index=True, use_container_width=True, column_config={
+        st.dataframe(bd, hide_index=True, width="stretch", column_config={
             "Closeness to ideal": st.column_config.ProgressColumn(format="%.2f", min_value=0, max_value=1),
             "Weight": st.column_config.NumberColumn(format="%.3f"),
             "Raw value": st.column_config.NumberColumn(format="%.3f")})
@@ -787,7 +878,7 @@ def analysis_page(ctx: dict, cid: str, short: list[str]) -> None:
     if not d.empty and (d.creator_key == cid).any():
         with st.expander("How we found this creator"):
             st.dataframe(d[d.creator_key == cid][["source", "platform", "handle", "query", "url", "evidence"]],
-                         hide_index=True, use_container_width=True, column_config={"url": st.column_config.LinkColumn()})
+                         hide_index=True, width="stretch", column_config={"url": st.column_config.LinkColumn()})
 
 
 # ------------------------------------------------------------------ shortlist page
@@ -797,7 +888,7 @@ def shortlist_page(ctx: dict, short: list[str]) -> None:
          f'For {esc(ctx["spec"].product)} · {esc(COUNTRY.get(ctx["spec"].target_country, ctx["spec"].target_country))}'
          f'</div>')
     if not short:
-        ui.empty_state("Your shortlist is empty.", "Open Discover and add creators with “+ Shortlist”.")
+        ui.empty_state("Your shortlist is empty.", "Open Creators and add creators with “+ Shortlist”.")
         return
     rows = []
     for cid in short:
@@ -808,21 +899,35 @@ def shortlist_page(ctx: dict, short: list[str]) -> None:
             if vm:
                 a.markdown(f'<div class="pn-card-head">{ui.avatar(name, vm["avatar"])}<div class="who">'
                            f'<div class="name">{esc(name)}</div><div class="meta">YouTube · '
-                           f'{esc(COUNTRY.get(vm["country"], vm["country"] or "–"))} · {ui.fmt_count(vm["subs"])} '
+                           f'{esc(COUNTRY.get(vm["country"], vm["country"]) + " · " if vm["country"] else "")}'
+                           f'{ui.fmt_count(vm["subs"])} '
                            f'subscribers</div><div style="margin-top:6px">'
-                           f'{ui.confidence_badge(vm["conf"], vm["conf_label"])}</div></div></div>',
+                           f'{ui.confidence_badge(vm["conf"], vm["conf_label"], basis=vm["basis"])}</div></div></div>',
                            unsafe_allow_html=True)
                 b.markdown(ui.score_block(vm["score"]), unsafe_allow_html=True)
-                c.button("View", key=f"slv_{cid}", on_click=go, args=("analysis", cid), use_container_width=True)
-                rows.append({"creator": name, "campaign_score": vm["score"], "data_confidence": round(vm["conf"], 2),
+                c.button("View", key=f"slv_{cid}", on_click=go, args=("analysis", cid), width="stretch")
+                rows.append({"creator": name, "rank": vm["rank"], "cost_proxy_eur": vm["cost"], "campaign_score": vm["score"], "data_confidence": round(vm["conf"], 2),
                              "subscribers": vm["subs"], "median_relevant_views": vm["median_views"],
                              "channel_url": vm["url"], "reasons": "; ".join(vm["reasons"])})
             else:
                 a.markdown(f"**{esc(name)}** — no longer passes the hard filters for this campaign")
             d.button("Remove", key=f"slr_{cid}", on_click=toggle_shortlist, args=(ctx["campaign"]["id"], cid),
-                     use_container_width=True)
+                     width="stretch")
     st.write("")
     if rows:
+        spec = ctx["spec"]
+        lines = [f"Creator shortlist — {spec.product} ({COUNTRY.get(spec.target_country, spec.target_country)})", ""]
+        for r in sorted(rows, key=lambda r: r["rank"]):
+            cost = f"≈ €{ui.fmt_count(r['cost_proxy_eur'])}/video" if r["cost_proxy_eur"] else "cost n/a"
+            lines.append(f"#{r['rank']} {r['creator']} — score {r['campaign_score']}/100 · "
+                         f"{ui.fmt_count(r['subscribers'])} subs · {cost}")
+            if r["reasons"]:
+                lines.append(f"   Why: {r['reasons']}")
+            if r["channel_url"]:
+                lines.append(f"   {r['channel_url']}")
+        lines += ["", f"Cost = median views × assumed €{config.ASSUMED_CPM_EUR:.0f} CPM (not a quote)."]
+        html('<div class="pn-kicker" style="margin-top:6px">Summary to share</div>')
+        st.code("\n".join(lines), language=None, wrap_lines=True)
         st.download_button("Export shortlist (CSV)", pd.DataFrame(rows).to_csv(index=False).encode(),
                            file_name="prenew_creator_shortlist.csv", mime="text/csv")
     html('<div class="pn-subtle" style="margin-top:10px">Next step: outreach — contact details are not collected by '
@@ -837,7 +942,7 @@ if ss.get("campaign") not in ids:
     ss.campaign = ids[0] if ids else None
 current = next((c for c in campaigns if c["id"] == ss.campaign), None)
 short = shortlist_ids(current["id"]) if current else []
-top_nav(len(short), current is not None)
+top_nav(len(short), current)
 
 if ss.view == "campaign" or current is None:
     campaign_page(campaigns)

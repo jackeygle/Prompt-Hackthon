@@ -4,7 +4,7 @@ Design direction: Prenew-inspired clean Nordic commerce × AI intelligence. The 
 technology audiences, but the visual language is deliberately not "gaming themed" (no RGB/neon/esports styling).
 
 Brand colors, typography and the official header logo were inspected on prenew.com/en-FI.
-The shared tokens apply across Campaign, Discover, Analysis and Shortlist.
+The shared tokens apply across Campaign, Creators, Analysis and Shortlist.
 """
 from html import escape
 from pathlib import Path
@@ -236,6 +236,39 @@ div[class*="st-key-card"]:hover {{ border-color:#256F50; box-shadow:0 8px 22px #
 .pn-steps .on .n {{ background:#256F50; color:white; }}
 .pn-chip.dark {{ background:#256F50; color:white; border-color:#256F50; }}
 .pn-stages li.done .st {{ color:white; }}
+div[class*="st-key-nav"] button p {{ white-space:nowrap; }}
+.pn-card-head .name {{ white-space:normal; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; }}
+.pn-bar.na .v {{ color:{T['text_subtle']}; font-weight:600; font-size:.75rem; }}
+/* top bar: brand + the campaign you are in */
+.pn-navbar {{ display:flex; align-items:center; gap:14px; min-width:0; }}
+.pn-context {{ display:flex; flex-direction:column; min-width:0; max-width:260px; line-height:1.25; }}
+.pn-context .k {{ font-size:.66rem; font-weight:700; letter-spacing:.1em; text-transform:uppercase; color:{T['text_subtle']}; }}
+.pn-context .v {{ font-weight:650; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }}
+.pn-context .m {{ font-size:.8rem; color:{T['text_muted']}; }}
+@media (max-width:1100px) {{ .pn-context {{ display:none; }} }}
+/* discover: one-line verdict above the cards */
+.pn-pick .k {{ font-size:.7rem; font-weight:700; letter-spacing:.1em; text-transform:uppercase; color:{T['accent']}; }}
+.pn-pick .n {{ font-family:'Sora',sans-serif; font-weight:700; font-size:1.15rem; margin:2px 0; }}
+.pn-pick .d {{ font-size:.85rem; color:{T['text_muted']}; }}
+div[class*="st-key-panel-pick"] {{ padding:16px 18px; border-left:4px solid {T['accent']}; }}
+/* campaign page once reports exist: the pitch shrinks to one line */
+.pn-hero-slim {{ background:#256F50; border-radius:16px; padding:18px 24px; display:flex; flex-wrap:wrap;
+  align-items:baseline; gap:6px 18px; margin-bottom:18px; }}
+.pn-hero-slim .t {{ font-family:'Sora',sans-serif; color:#fff; font-weight:700; font-size:1.3rem; }}
+.pn-hero-slim .p {{ color:#9DF69A; font-weight:600; font-size:.9rem; }}
+/* narrow cards (3 columns on a small screen): score moves under the name instead of squeezing it */
+div[class*="st-key-card-cr-"] {{ container-type:inline-size; }}  /* creator cards only */
+@container (max-width: 340px) {{
+ .pn-card-head {{ flex-wrap:wrap; }}
+ .pn-card-head .who {{ min-width:120px; }}
+ .pn-score {{ order:3; width:100%; display:flex; align-items:baseline; gap:8px; text-align:left; padding:8px 12px; }}
+ .pn-score .lbl {{ margin-top:0; }}
+ .pn-stats.three {{ grid-template-columns:repeat(2,minmax(0,1fr)); }}
+ .pn-stat .k {{ font-size:.6rem; letter-spacing:.02em; }}
+ [data-testid="stHorizontalBlock"] {{ flex-wrap:wrap; }}
+ [data-testid="stHorizontalBlock"] > [data-testid="stColumn"] {{ min-width:100%; }}
+}}
+.pn-bar.na .track {{ background:repeating-linear-gradient(90deg, {T['surface_alt']} 0 6px, transparent 6px 10px); }}
 @media (max-width:640px) {{
  .pn-brand {{ padding:12px; flex-wrap:wrap; }}
  .pn-hero {{ padding:26px 22px; min-height:0; }}
@@ -290,9 +323,10 @@ def chip(text: str, dark: bool = False) -> str:
     return f'<span class="pn-chip{" dark" if dark else ""}">{esc(text)}</span>'
 
 
-def confidence_badge(conf: float, label: str, show_pct: bool = True) -> str:
+def confidence_badge(conf: float, label: str, show_pct: bool = True, basis: str = "") -> str:
+    """With `basis` (e.g. "2 videos · 0 comments") the evidence is shown instead of the percentage."""
     text, fg, bg = CONFIDENCE_STYLE[label]
-    val = f" · {conf * 100:.0f}%" if show_pct else ""
+    val = f" · {esc(basis).upper()}" if basis else (f" · {conf * 100:.0f}%" if show_pct else "")
     return (f'<span class="pn-badge" style="color:{fg};background:{bg}" title="Data confidence: how much data '
             f'backs this score. Separate from the campaign score."><span class="dot" style="background:{fg}"></span>'
             f'{text}{val}</span>')
@@ -304,6 +338,11 @@ def gem_badge() -> str:
             f'ranked creator">◆ HIDDEN GEM</span>')
 
 
+def budget_badge() -> str:
+    return (f'<span class="pn-badge" style="color:{T["warn"]};background:{T["warn_soft"]}" title="Cost proxy is above '
+            f'the budget per video set under Ranking priorities. The score is unchanged.">OVER BUDGET</span>')
+
+
 def score_block(score: int, label: str = "Campaign score", xl: bool = False) -> str:
     """The TOPSIS score: relative to the creators in this campaign (tooltip says so)."""
     return (f'<div class="pn-score{" xl" if xl else ""}" title="Campaign score: ranking against the other creators '
@@ -312,16 +351,19 @@ def score_block(score: int, label: str = "Campaign score", xl: bool = False) -> 
 
 
 def metric_bar(label: str, value: float | None, accent: bool = False, display: str | None = None) -> str:
-    v = 0 if value is None else max(0.0, min(100.0, value))
-    shown = display if display is not None else ("–" if value is None else f"{value:.0f}")
-    return (f'<div class="pn-bar{" accent" if accent else ""}"><span class="l">{esc(label)}</span>'
+    na = value is None  # no data is shown as such, never as an empty (zero-looking) bar
+    v = 0 if na else max(0.0, min(100.0, value))
+    shown = "No data" if na else (display if display is not None else f"{value:.0f}")
+    cls = (" accent" if accent else "") + (" na" if na else "")
+    return (f'<div class="pn-bar{cls}"><span class="l">{esc(label)}</span>'
             f'<span class="v">{esc(shown)}</span><div class="track"><div class="fill" style="width:{v:.0f}%"></div>'
             f'</div></div>')
 
 
-def stat_tile(k: str, v: str) -> str:
+def stat_tile(k: str, v: str, hint: str = "") -> str:
     """Small key figure (label + value), used on creator cards and the analysis header."""
-    return f'<div class="pn-stat"><div class="k">{esc(k)}</div><div class="val">{esc(v)}</div></div>'
+    title = f' title="{esc(hint)}"' if hint else ""
+    return f'<div class="pn-stat"{title}><div class="k">{esc(k)}</div><div class="val">{esc(v)}</div></div>'
 
 
 def reasons_list(good: list[str], gaps: list[str] | None = None) -> str:
