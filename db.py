@@ -106,5 +106,16 @@ def cache_get(key: str):
     return json.loads(rows[0]["response"]) if rows else None
 
 
+def delete_campaign(campaign_id: str) -> None:
+    """Atomically delete one report; shared creator/content/cache records stay intact."""
+    with _lock:
+        c = conn()
+        with c:
+            for table in ("features", "evidence", "rankings", "discoveries", "visual_tags", "run_stats", "shortlist"):
+                if c.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (table,)).fetchone():
+                    c.execute(f"DELETE FROM {table} WHERE campaign_id=?", (campaign_id,))
+            c.execute("DELETE FROM campaigns WHERE id=?", (campaign_id,))
+
+
 def cache_put(key: str, value) -> None:
     execute("INSERT OR REPLACE INTO api_cache VALUES (?,?,?)", (key, json.dumps(value), now()))

@@ -1,10 +1,10 @@
 # Theme values mirror ui.TOKENS (Streamlit widgets like toggles/segmented controls read these).
 [theme]
 base = "light"
-primaryColor = "#141414"
-backgroundColor = "#F5F5F2"
-secondaryBackgroundColor = "#F0F0EC"
-textColor = "#141414"
+primaryColor = "#256F50"
+backgroundColor = "#F8F8FF"
+secondaryBackgroundColor = "#EEEEF2"
+textColor = "#1D1D35"
 font = "sans serif"
 
 [client]

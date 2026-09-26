@@ -101,8 +101,7 @@ def use_source() -> None:
 
 
 def list_campaigns() -> list[dict]:
-    return db.query("SELECT id, brief, spec_json, created_at FROM campaigns c WHERE EXISTS "
-                    "(SELECT 1 FROM rankings r WHERE r.campaign_id=c.id) ORDER BY created_at DESC")
+    return db.query("SELECT id, brief, spec_json, created_at FROM campaigns ORDER BY created_at DESC")
 
 
 def shortlist_ids(campaign_id: str) -> list[str]:
@@ -212,8 +211,7 @@ def build_context(campaign: dict) -> dict:
 def top_nav(n_short: int, has_campaign: bool) -> None:
     left, *navs = st.columns([5.2, 1.05, 1.05, 1.25], vertical_alignment="center")
     with left:
-        html('<div class="pn-brand"><span class="logo">prenew<span>.</span></span>'
-             '<span class="product">Creator Intelligence</span></div>')
+        html(ui.brand_header())
     current = "discover" if ss.view == "analysis" else ss.view
     for col, (view, label) in zip(navs, [("campaign", "Campaign"), ("discover", "Discover"),
                                          ("shortlist", f"Shortlist · {n_short}")]):
@@ -260,7 +258,11 @@ def run_with_stages(spec: CampaignSpec, brief: str, seeds: list[str]) -> None:
 
 
 def _submit_brief() -> None:
-    ss.parse_request = ss.get("brief_input", DEFAULT_BRIEF)
+    brief = ss.get("campaign_brief_v2", "").strip()
+    if brief:
+        ss.parse_request = brief
+    else:
+        ss.brief_error = True
 
 
 def _discard_draft() -> None:
@@ -301,7 +303,9 @@ def campaign_page(campaigns: list[dict]) -> None:
         html('<div class="pn-hero"><div class="pn-kicker">Prenew Creator Intelligence</div>'
              '<h1>Find the creators our gamers already watch.</h1>'
              '<p>Describe the campaign. We find, evaluate and rank relevant gaming and tech creators — '
-             'with the evidence behind every recommendation.</p></div>')
+             'with the evidence behind every recommendation.</p>'
+             '<div class="pn-hero-proof"><span>01 · Discover</span><span>02 · Compare</span>'
+             '<span>03 · Shortlist</span></div></div>')
     with form:
         running = ss.pop("run_request", None)
         parse = ss.pop("parse_request", None)
@@ -327,8 +331,10 @@ def campaign_page(campaigns: list[dict]) -> None:
             if ss.get("draft") is None:
                 html(ui.steps(0) + '<div class="pn-kicker">Campaign brief</div>')
                 with st.form("brief_form", border=False):
-                    st.text_area("Campaign brief", ss.get("draft_brief", DEFAULT_BRIEF), height=110,
-                                 label_visibility="collapsed", key="brief_input")
+                    st.text_area("Campaign brief", value="", height=150, placeholder="Describe your campaign…",
+                                 label_visibility="collapsed", key="campaign_brief_v2")
+                    if ss.pop("brief_error", False):
+                        st.warning("Describe your campaign before continuing.")
                     html(f'<div class="pn-subtle" style="margin:-4px 0 12px">{esc(BRIEF_EXAMPLES)}</div>')
                     st.form_submit_button("Continue →", type="primary", use_container_width=True,
                                           on_click=_submit_brief)
@@ -399,7 +405,8 @@ def recent_campaigns(campaigns: list[dict]) -> None:
         ui.empty_state("No campaigns yet.", "Describe a campaign above to find creators.")
         return
     cols = st.columns(3)
-    for col, c in zip(cols, campaigns[:3]):
+    for i, c in enumerate(campaigns):
+        col = cols[i % 3]
         spec = CampaignSpec.model_validate_json(c["spec_json"])
         n = db.query("SELECT COUNT(*) n FROM rankings WHERE campaign_id=? AND passed_hard_filter=1", (c["id"],))[0]["n"]
         with col, st.container(key=f"card-camp-{ui.key(c['id'])}"):
@@ -409,6 +416,26 @@ def recent_campaigns(campaigns: list[dict]) -> None:
                  + (ui.chip(spec.price_segment) if spec.price_segment else "") + ui.chip(spec.goal.capitalize()))
             st.button("Open →", key=f"open_{c['id']}", on_click=lambda i=c["id"]: (
                 ss.update(campaign=i, view="discover", creator=None)), use_container_width=True)
+            if st.button("Delete report", key=f"delete_{c['id']}", type="tertiary"):
+                confirm_delete(c["id"], spec.product, ss.source)
+
+
+@st.dialog("Delete this report?")
+def confirm_delete(campaign_id: str, product: str, source: str) -> None:
+    st.write(f'This will permanently remove the saved report for “{product}”.')
+    st.caption("Other reports and their creator data will be kept.")
+    cancel, delete = st.columns(2)
+    if cancel.button("Cancel", use_container_width=True):
+        st.rerun()
+    if delete.button("Delete", type="primary", use_container_width=True):
+        if ss.source != source:
+            st.error("The data source changed. Close this dialog and select the report again.")
+            return
+        use_source()
+        db.delete_campaign(campaign_id)
+        if ss.get("campaign") == campaign_id:
+            ss.campaign, ss.creator, ss.view = None, None, "campaign"
+        st.rerun()
 
 
 # ------------------------------------------------------------------ discover page

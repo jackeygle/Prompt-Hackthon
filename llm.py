@@ -32,6 +32,7 @@ class MissingKeyError(LLMError):
 
 
 KEY_ENV = {"gemini": "GEMINI_API_KEY", "groq": "GROQ_API_KEY", "openai": "OPENAI_API_KEY",
+           "azure": "AZURE_OPENAI_API_KEY",
            "anthropic": "ANTHROPIC_API_KEY"}
 
 
@@ -133,6 +134,21 @@ def _openai(model: str, system: str, user: str, schema: dict, images: list[Image
     return _openai_compatible(client, model, system, user, schema, images, **extra)
 
 
+def _azure(model: str, system: str, user: str, schema: dict, images: list[Image] | None) -> str:
+    """Azure OpenAI v1 endpoint, using the deployment name as model."""
+    from openai import OpenAI
+    endpoint = config.AZURE_OPENAI_ENDPOINT.rstrip("/")
+    if endpoint.endswith("/responses"):
+        endpoint = endpoint[:-len("/responses")]
+    if not endpoint.endswith("/openai/v1"):
+        endpoint += "/openai/v1"
+    client = _azure.client = getattr(_azure, "client", None) or OpenAI(
+        api_key=_require_key("azure"), base_url=endpoint, max_retries=0, timeout=90)
+    deployment = config.AZURE_OPENAI_DEPLOYMENT or model
+    extra = {} if deployment.startswith(("gpt-5", "o")) else {"temperature": 0.1}
+    return _openai_compatible(client, deployment, system, user, schema, images, **extra)
+
+
 def _anthropic(model: str, system: str, user: str, schema: dict, images: list[Image] | None) -> str:
     import base64
     import anthropic
@@ -151,7 +167,7 @@ def _anthropic(model: str, system: str, user: str, schema: dict, images: list[Im
     return json.dumps(next(b.input for b in resp.content if b.type == "tool_use"))
 
 
-BACKENDS = {"gemini": _gemini, "groq": _groq, "openai": _openai, "anthropic": _anthropic}
+BACKENDS = {"gemini": _gemini, "groq": _groq, "openai": _openai, "azure": _azure, "anthropic": _anthropic}
 
 
 class _RateLimiter:

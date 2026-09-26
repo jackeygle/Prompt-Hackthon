@@ -3,11 +3,11 @@
 Design direction: Prenew-inspired clean Nordic commerce × AI intelligence. The business context is gaming and
 technology audiences, but the visual language is deliberately not "gaming themed" (no RGB/neon/esports styling).
 
-All visual values live in TOKENS. They are a PROVISIONAL Prenew-inspired palette (prenew.com could not be
-inspected from the build environment): replace the hex values here with the brand's real ones and the
-whole app follows.
+Brand colors, typography and the official header logo were inspected on prenew.com/en-FI.
+The shared tokens apply across Campaign, Discover, Analysis and Shortlist.
 """
 from html import escape
+from pathlib import Path
 
 import streamlit as st
 
@@ -42,6 +42,20 @@ TOKENS = {
 }
 T = TOKENS
 
+# Verified against prenew.com/en-FI and its official stylesheet, 2026-09-26.
+TOKENS.update(bg="#F8F8FF", surface_alt="#EEEEF2", text="#1D1D35", text_muted="#4A4A5D",
+              text_subtle="#777786", border="#DDDDE4", border_strong="#A9AABC",
+              cta="#9DF69A", cta_hover="#B1F8AE", cta_text="#1D1D35",
+              accent="#256F50", accent_soft="#EBFDEB", gem="#0A74FF", gem_soft="#E6F1FF",
+              radius="24px", radius_sm="12px",
+              font="'Titillium Web', 'Segoe UI', Helvetica, Arial, sans-serif")
+
+
+def brand_header() -> str:
+    logo = (Path(__file__).parent / "assets" / "prenew-logo.svg").read_text()
+    return ('<div class="pn-brand"><span class="pn-official-logo" role="img" aria-label="Prenew">'
+            + logo + '</span><span class="product">Creator Intelligence</span></div>')
+
 CONFIDENCE_STYLE = {  # text is always shown; colour is secondary
     "High": ("HIGH CONFIDENCE", T["accent"], T["accent_soft"]),
     "Medium": ("MEDIUM CONFIDENCE", T["warn"], T["warn_soft"]),
@@ -52,7 +66,7 @@ CONFIDENCE_STYLE = {  # text is always shown; colour is secondary
 def inject_css() -> None:
     st.markdown(f"""
 <style>
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Sora:wght@400;600;700;800&family=Titillium+Web:wght@400;600;700&display=swap');
 :root {{ --radius: {T['radius']}; }}
 html, body, [data-testid="stAppViewContainer"], .stApp {{ background: {T['bg']}; color: {T['text']};
   font-family: {T['font']}; }}
@@ -194,6 +208,41 @@ div[data-testid="stExpander"] details {{ border: 1px solid {T['border']}; border
 .pn-note {{ background:{T['surface_alt']}; border-radius:{T['radius_sm']}; padding:10px 12px; font-size:.84rem;
   color:{T['text_muted']}; }}
 @media (max-width: 1100px) {{ .pn-hero h1 {{ font-size:2.3rem; }} .block-container {{ padding: 1rem 1rem 3rem; }} }}
+/* Official Prenew palette and commerce-inspired hierarchy. */
+h1, h2, h3, h4, .pn-score .num, .pn-card-head .name {{ font-family:'Sora', sans-serif; }}
+.pn-brand {{ gap:16px; padding:18px 22px; background:#256F50; border-radius:16px; width:fit-content; }}
+.pn-official-logo {{ display:flex; color:#9DF69A; }}
+.pn-brand .product {{ color:#fff; font-size:.72rem; border-left:1px solid #7CA996; padding-left:16px; }}
+.pn-hero {{ background:#256F50; border-radius:24px; padding:38px 32px; min-height:400px; }}
+.pn-hero h1 {{ font-family:'Sora',sans-serif; color:#fff; font-size:clamp(2rem,3.4vw,3.3rem); font-weight:800; line-height:1.15; }}
+.pn-hero .pn-kicker {{ color:#9DF69A; }}
+.pn-hero p {{ color:#EBFDEB; font-size:1.15rem; line-height:1.6; }}
+.pn-hero-proof {{ display:flex; flex-wrap:wrap; gap:10px 18px; margin-top:34px; padding-top:20px;
+ border-top:1px solid #518C73; color:#9DF69A; font-weight:600; }}
+.stButton > button, .stDownloadButton > button, .stFormSubmitButton > button {{ border-radius:12px; min-height:44px; }}
+.stButton > button[kind="tertiary"] {{ border:none; background:transparent; color:#4A4A5D; padding:4px 0; min-height:32px; }}
+.stButton > button[kind="tertiary"]:hover {{ color:#BF000F; text-decoration:underline; }}
+div[class*="st-key-navon-"] button {{ background:#256F50 !important; color:white !important; }}
+div[class*="st-key-card"] {{ border-top:3px solid #A8C5B9; }}
+div[class*="st-key-card"]:hover {{ border-color:#256F50; box-shadow:0 8px 22px #1d1d3510; }}
+.pn-score {{ background:#EBFDEB; border:1px solid #A8C5B9; padding:12px; border-radius:16px; color:#256F50; }}
+.pn-score .num {{ font-size:2rem; }}
+.pn-rank {{ color:#256F50; }}
+.pn-stat {{ border:1px solid #EEEef2; background:#F8F8FF; }}
+.pn-stat .val {{ font-variant-numeric:tabular-nums; }}
+.pn-empty {{ border-style:solid; border-top:4px solid #256F50; background:#EBFDEB; }}
+.pn-stages li.active {{ background:#EBFDEB; border-radius:12px; padding:12px; }}
+.pn-steps {{ flex-wrap:wrap; gap:8px 14px; }}
+.pn-steps .on .n {{ background:#256F50; color:white; }}
+.pn-chip.dark {{ background:#256F50; color:white; border-color:#256F50; }}
+.pn-stages li.done .st {{ color:white; }}
+@media (max-width:640px) {{
+ .pn-brand {{ padding:12px; flex-wrap:wrap; }}
+ .pn-hero {{ padding:26px 22px; min-height:0; }}
+ .pn-stats.three {{ grid-template-columns:repeat(2,minmax(0,1fr)); }}
+ .pn-card-head {{ flex-wrap:wrap; }}
+}}
+@media (prefers-reduced-motion:reduce) {{ * {{ transition:none !important; animation:none !important; }} }}
 </style>""", unsafe_allow_html=True)
 
 

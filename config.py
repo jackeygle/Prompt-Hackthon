@@ -11,6 +11,9 @@ YOUTUBE_API_KEY = os.getenv("YOUTUBE_API_KEY", "")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
+AZURE_OPENAI_ENDPOINT = os.getenv("AZURE_OPENAI_ENDPOINT", "")
+AZURE_OPENAI_API_KEY = os.getenv("AZURE_OPENAI_API_KEY", "")
+AZURE_OPENAI_DEPLOYMENT = os.getenv("AZURE_OPENAI_DEPLOYMENT", "")
 TAVILY_API_KEY = os.getenv("TAVILY_API_KEY", "")
 
 DB_PATH = Path(os.getenv("DB_PATH", ROOT / "data" / "creator_intel.db"))
@@ -35,17 +38,18 @@ PROVIDER_RPM = {"gemini": int(os.getenv("GEMINI_RPM", "5")), "groq": int(os.gete
 TRANSCRIPTS_ENABLED = os.getenv("TRANSCRIPTS_ENABLED", "1") == "1"
 
 # Pipeline sizes (see assessment §7)
-N_QUERIES = 6
-SEARCH_RESULTS_PER_QUERY = 50
+N_QUERIES = int(os.getenv("N_QUERIES", "6"))
+SEARCH_RESULTS_PER_QUERY = int(os.getenv("SEARCH_RESULTS_PER_QUERY", "50"))
 MIN_SUBSCRIBERS = 2_000
 MAX_SUBSCRIBERS = 3_000_000
-N_AFTER_CHEAP_FILTER = 20     # minimum channels screened; actual = max(this, 2 x creators), capped
-MAX_SCREENED = 100
-DEFAULT_N_CREATORS = 10        # creators analysed in depth; user-selectable (5/10/20/50) per campaign
+DEFAULT_N_CREATORS = int(os.getenv("DEFAULT_N_CREATORS", "10"))
 N_CREATOR_OPTIONS = [5, 10, 20, 50]
-UPLOADS_TO_SCAN = 30
-VIDEOS_PER_CREATOR = 5
-COMMENTS_PER_VIDEO = 50
+N_AFTER_CHEAP_FILTER = int(os.getenv("N_AFTER_CHEAP_FILTER", "25"))
+MAX_SCREENED = int(os.getenv("MAX_SCREENED", "100"))
+UPLOADS_TO_SCAN = int(os.getenv("UPLOADS_TO_SCAN", "30"))
+N_DEEP = int(os.getenv("N_DEEP", "15"))
+VIDEOS_PER_CREATOR = int(os.getenv("VIDEOS_PER_CREATOR", "5"))
+COMMENTS_PER_VIDEO = int(os.getenv("COMMENTS_PER_VIDEO", "50"))
 TRANSCRIPT_CHARS = 6_000   # per video; keeps content prompts within Groq free-tier TPM
 
 # Hard filter
