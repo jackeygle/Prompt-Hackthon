@@ -105,6 +105,9 @@ def hard_filter(f: dict) -> tuple[bool, str]:
         reasons.append(f"fewer than {config.MIN_RELEVANT_VIDEOS} relevant videos")
     if f.get("niche_relevance") is not None and f["niche_relevance"] < config.MIN_NICHE_RELEVANCE:
         reasons.append("niche relevance too low")
+    lang = f.get("target_lang_share")
+    if lang is not None and lang < config.MIN_TARGET_LANG_SHARE:
+        reasons.append(f"only {lang:.0%} of comments in target language")
     if f.get("niche_relevance") is None:
         reasons.append("content analysis failed")
     return (not reasons, "; ".join(reasons))

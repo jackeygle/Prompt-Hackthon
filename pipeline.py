@@ -76,7 +76,7 @@ def run_campaign(brief: str, spec: CampaignSpec | None = None, seed_handles: lis
     db.execute("INSERT INTO campaigns VALUES (?,?,?,?)", (campaign_id, brief, spec.model_dump_json(), db.now()))
 
     # 2. Discovery: search videos, group by channel
-    after = (datetime.now(timezone.utc) - timedelta(days=365)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    after = (datetime.now(timezone.utc) - timedelta(days=365)).strftime("%Y-%m-%dT00:00:00Z")  # day granularity keeps the cache key stable
     hits: Counter = Counter()
     queries = spec.search_queries[:config.N_QUERIES]
     for i, q in enumerate(queries):
@@ -276,12 +276,15 @@ def rank_and_store(campaign_id: str, preset: str, extra: dict | None = None) -> 
     ok = [cid for cid, (p, _) in passed.items() if p]
     df = pd.DataFrame({cid: feats[cid] for cid in ok}).T.reindex(columns=[c.name for c in ranking.CRITERIA])
     res = ranking.topsis(df, weights) if len(df) else pd.DataFrame()
+    previous = {r["creator_id"]: json.loads(r["breakdown_json"] or "{}")
+                for r in db.query("SELECT creator_id, breakdown_json FROM rankings WHERE campaign_id=?", (campaign_id,))}
     db.execute("DELETE FROM rankings WHERE campaign_id=?", (campaign_id,))
     for cid, f in feats.items():
         p_ok, reason = passed[cid]
         n_imp = int(sum(res.loc[cid, f"imputed__{c}"] for c in weights)) if p_ok else 0
         conf = ranking.confidence(f, n_imp)
-        meta = {k: v for k, v in (extra or {}).get(cid, {}).items() if k in ("summary", "niche_label", "videos")}
+        meta = {k: v for k, v in previous.get(cid, {}).items() if k != "explain"}
+        meta.update({k: v for k, v in (extra or {}).get(cid, {}).items() if k in ("summary", "niche_label", "videos")})
         if p_ok:
             meta["explain"] = ranking.explain(res.loc[cid], weights)
         db.execute("INSERT INTO rankings VALUES (?,?,?,?,?,?,?,?)",

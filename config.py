@@ -37,6 +37,7 @@ TRANSCRIPT_CHARS = 12_000
 MAX_DAYS_SINCE_UPLOAD = 120
 MIN_RELEVANT_VIDEOS = 2
 MIN_NICHE_RELEVANCE = 1.0   # 0..3 scale
+MIN_TARGET_LANG_SHARE = 0.3  # share of comments in the target language (audience-country proxy)
 
 ASSUMED_CPM_EUR = 20.0      # assumption for cost estimate, shown in UI
 LLM_RPM = int(os.getenv("LLM_RPM", "5"))   # per model; Gemini free tier = 5

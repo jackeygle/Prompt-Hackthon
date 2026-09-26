@@ -65,11 +65,12 @@ spec = CampaignSpec.model_validate_json(camp["spec_json"])
 # ------------------------------------------------------------------ header
 st.title("Creator Intelligence Engine")
 st.markdown(f"**Brief:** {camp['brief']}")
-c1, c2, c3, c4 = st.columns(4)
-c1.metric("Product", spec.product)
-c2.metric("Price segment", spec.price_segment)
-c3.metric("Market / language", f"{spec.target_country} / {spec.target_language}")
-c4.metric("Goal", spec.goal)
+c1, c2, c3, c4 = st.columns([3, 2, 2, 2])
+for col, label, value in [(c1, "Product", spec.product), (c2, "Price segment (product)", spec.price_segment),
+                          (c3, "Market / language", f"{spec.target_country} / {spec.target_language}"),
+                          (c4, "Goal", spec.goal)]:
+    col.caption(label)
+    col.markdown(f"**{value}**")
 with st.expander("Interpreted campaign spec & search queries"):
     st.json(spec.model_dump())
 
@@ -147,15 +148,14 @@ with left:
                "Audience geography is not available from YouTube; 'German comments' is a proxy.")
 with right:
     chart = alt.Chart(table).mark_circle(size=120).encode(
-        x=alt.X("Confidence:Q", scale=alt.Scale(domain=[0, 1]), title="Data confidence"),
-        y=alt.Y("Campaign score:Q", scale=alt.Scale(domain=[0, 1])),
+        x=alt.X("Confidence:Q", scale=alt.Scale(zero=False, padding=20), title="Data confidence"),
+        y=alt.Y("Campaign score:Q", scale=alt.Scale(zero=False, padding=20)),
         tooltip=["Rank", "Creator", alt.Tooltip("Campaign score:Q", format=".2f"),
                  alt.Tooltip("Confidence:Q", format=".2f")],
     )
-    text = chart.mark_text(align="left", dx=8, fontSize=11).encode(text="Creator")
-    rule = alt.Chart(pd.DataFrame({"x": [0.5]})).mark_rule(strokeDash=[4, 4], opacity=0.4).encode(x="x")
-    st.altair_chart(chart + text + rule, use_container_width=True)
-    st.caption("Top-left = strong fit but thin data → worth a manual check.")
+    text = chart.mark_text(align="left", dx=8, fontSize=10).encode(text="Rank:O")
+    st.altair_chart(chart + text, use_container_width=True)
+    st.caption("Labels = rank. Top-left = strong fit but thin data → worth a manual check.")
 
 # ------------------------------------------------------------------ creator detail
 st.divider()

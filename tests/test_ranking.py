@@ -70,6 +70,9 @@ def test_hard_filter():
     assert ok
     ok, reason = ranking.hard_filter({"days_since_last_relevant": 400, "n_relevant_videos": 1, "niche_relevance": 0})
     assert not ok and "relevant" in reason
+    ok, reason = ranking.hard_filter({"days_since_last_relevant": 3, "n_relevant_videos": 5, "niche_relevance": 3,
+                                      "target_lang_share": 0.05})
+    assert not ok and "target language" in reason
 
 
 def test_confidence_bounds():
