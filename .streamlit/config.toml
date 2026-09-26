@@ -1,0 +1,11 @@
+# Theme values mirror ui.TOKENS (Streamlit widgets like toggles/segmented controls read these).
+[theme]
+base = "light"
+primaryColor = "#141414"
+backgroundColor = "#F5F5F2"
+secondaryBackgroundColor = "#F0F0EC"
+textColor = "#141414"
+font = "sans serif"
+
+[client]
+toolbarMode = "minimal"

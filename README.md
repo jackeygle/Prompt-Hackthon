@@ -13,8 +13,8 @@ reported next to a separate **Data Confidence** score.
 ```bash
 pip install -r requirements.txt
 cp .env.example .env        # YOUTUBE_API_KEY + GROQ_API_KEY required; TAVILY/OPENAI/GEMINI optional
-streamlit run app.py        # "Demo snapshot" source, or sidebar → New campaign run → 1 · Parse brief →
-                            # review/edit spec → 2 · Confirm & run
+streamlit run app.py        # Campaign → Continue → confirm details → Find creators → Discover → View analysis
+                            # → Shortlist. "Offline demo snapshot" under Recent campaigns works without network.
 # or headless:
 python pipeline.py "Find creators for €600–900 refurbished gaming PCs targeting gamers in Germany."
 python -m pytest -q
@@ -35,7 +35,7 @@ python check_setup.py      # one tiny request per API: shows exactly which keys/
 | Deep analysis (top 15) | `features.py` | YouTube + Groq | 5 relevant videos, transcript if available else title+description, 50 comments/video |
 | Visual features | `vision.py` | OpenAI | 1 call per creator, 4 official thumbnail URLs, `detail=low` |
 | Hard filter → AHP → TOPSIS | `ranking.py` | – | deterministic; criteria with < 50% coverage are dropped and shown |
-| Dashboard | `app.py` | – | live re-weighting, confidence scatter, evidence, visual tags, discovery sources, web-only creators, run stats |
+| UI | `app.py` + `ui.py` | – | Campaign / Discover / Shortlist; creator cards, analysis with evidence cards, live AHP re-weighting, staged loader driven by real pipeline progress |
 
 AI models only extract features and evidence. They never compare or rank creators.
 
@@ -83,3 +83,13 @@ Missing values are imputed with the unfavourable quartile and lower confidence; 
 
 `LLM_MODELS=groq/<model>,gemini/<model>,openai/<model>,anthropic/<model>` (first available wins). All extraction
 goes through `LLMClient.extract(schema, system, user, images=None)` with Pydantic validation.
+
+## UI / design system
+
+`ui.py` holds all design tokens (`TOKENS`), the global CSS and small render helpers (cards, score, confidence
+badge, metric bars, evidence cards, stage list). `.streamlit/config.toml` mirrors the main tokens for native widgets.
+The palette is a provisional Prenew-inspired one — replace the hex values in `TOKENS` (and the config file)
+with the brand's exact colours. Group scores on cards (Campaign fit, Community, Performance, Product evidence)
+are the weighted TOPSIS closeness per criterion group, relative to the ranked candidate set; **Hidden gem** =
+campaign fit ≥ 70 with fewer subscribers than the median ranked creator. Shortlists are stored per campaign in a
+`shortlist` table.
