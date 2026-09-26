@@ -407,7 +407,13 @@ div[class*="st-key-panel-head"] .pn-tier.t-c, div[class*="st-key-card-sl-"] .pn-
 /* ===== home: centered search hero, bar with the CTA inside, report card overlapping the band ===== */
 div[class*="st-key-band"] .pn-hero-slim.pn-center {{ text-align:center; padding:34px 0 14px; }}
 div[class*="st-key-band"] .pn-hero-slim.pn-center .t {{ margin:0 auto 10px; max-width:900px; }}
-div[class*="st-key-briefbar"] {{ max-width:760px; margin:0 auto; width:100%; }}
+div[class*="st-key-briefbar"] {{ max-width:580px; margin:0 auto; width:100%; transition:max-width .25s ease; }}
+/* grows wider once the user is typing (or a chip filled it), and taller as the text wraps */
+div[class*="st-key-briefbar"]:has(textarea:focus), div[class*="st-key-briefbar"]:has(textarea:not(:placeholder-shown)) {{
+  max-width:760px; }}
+div[class*="st-key-briefbar"] .stTextArea textarea {{ field-sizing:content; height:auto !important; min-height:56px !important;
+  max-height:170px; overflow-y:auto; }}
+div[class*="st-key-briefbar"] .stTextArea div {{ height:auto !important; }}
 div[class*="st-key-briefbar"] div[class*="st-key-panel-campaign"] {{ max-width:none; margin:4px 0 0; }}
 div[class*="st-key-briefbar"] [data-testid="stForm"] [data-testid="stHorizontalBlock"] {{ background:#fff;
   border-radius:18px; padding:6px; gap:6px; box-shadow:0 14px 34px rgba(8,32,20,.30); align-items:center; }}
@@ -424,7 +430,16 @@ div[class*="st-key-briefbar"] .stTextArea div {{ border-color:transparent !impor
 div[class*="st-key-briefbar"] [data-testid="stForm"] [data-testid="stHorizontalBlock"]:focus-within {{
   box-shadow:0 0 0 3px var(--pn-lime), 0 14px 34px rgba(8,32,20,.30); }}
 div[class*="st-key-briefbar"] .stFormSubmitButton > button {{ min-height:56px; border-radius:14px; box-shadow:none; }}
-div[class*="st-key-briefchips"] {{ margin:10px 0 78px; align-items:center; }}
+div[class*="st-key-briefchips"] {{ margin:10px 0 78px; align-items:center; flex-wrap:nowrap !important;
+  width:max-content !important; max-width:none !important; position:relative; left:50%; transform:translateX(-50%); }}
+div[class*="st-key-briefbar"] [data-testid="stForm"] [data-testid="stHorizontalBlock"] {{ flex-wrap:nowrap !important; }}
+div[class*="st-key-briefbar"] [data-testid="stForm"] [data-testid="stHorizontalBlock"] > [data-testid="stColumn"]:first-child {{
+  flex:1 1 0 !important; width:auto !important; min-width:0 !important; }}
+div[class*="st-key-briefbar"] .stTextArea, div[class*="st-key-briefbar"] .stTextArea textarea {{ width:100% !important;
+  min-width:0 !important; }}
+div[class*="st-key-briefbar"] [data-testid="stForm"] [data-testid="stHorizontalBlock"] > [data-testid="stColumn"]:last-child {{
+  flex:0 0 136px !important; width:136px !important; min-width:136px; }}
+div[class*="st-key-briefbar"] [data-testid="InputInstructions"] {{ display:none !important; }}
 div[class*="st-key-briefchips"] .pn-brief-ex {{ margin:0 2px 0 0; }}
 div[class*="st-key-briefchips"] .stButton button {{ min-height:30px !important; padding:3px 12px !important;
   border-radius:999px !important; background:rgba(255,255,255,.10) !important; border:1px solid rgba(255,255,255,.32)

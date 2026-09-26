@@ -384,7 +384,7 @@ def campaign_page(campaigns: list[dict]) -> None:
                     with st.form("brief_form", border=False):
                         inp, go_col = st.columns([6, 1.25], vertical_alignment="center", gap="small")
                         inp.text_area("Campaign brief", height=68, label_visibility="collapsed",
-                                      placeholder="Describe your campaign — product, market, audience, budget…",
+                                      placeholder="Describe your campaign…",
                                       key="campaign_brief_v2")
                         with go_col:
                             st.form_submit_button("Continue →", type="primary", width="stretch",
