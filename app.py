@@ -25,8 +25,6 @@ st.set_page_config(page_title="Prenew Creator Intelligence", page_icon="◆", la
                    initial_sidebar_state="collapsed")
 ui.inject_css()
 
-LIVE_DB = config.DB_PATH
-DEMO_DB = config.ROOT / "data" / "demo.db"
 DEFAULT_BRIEF = "Find creators for €600–900 refurbished gaming PCs targeting gamers in Germany."  # demo example only
 BRIEF_EXAMPLES = ("e.g. “Gaming PCs under €800 for Fortnite and CS2 players in Sweden” or "
                   "“RTX 4070 PCs for streamers in Finland, creators with 20k–500k subscribers”")
@@ -91,12 +89,11 @@ STAGES = ["Understanding campaign", "Searching YouTube", "Searching the web", "S
 
 ss = st.session_state
 ss.setdefault("view", "campaign")
-ss.setdefault("source", "live" if LIVE_DB.exists() or not DEMO_DB.exists() else "demo")
 
 
 # ------------------------------------------------------------------ data access
-def use_source() -> None:
-    db.use(DEMO_DB if ss.source == "demo" and DEMO_DB.exists() else LIVE_DB)
+def open_db() -> None:
+    db.use(config.DB_PATH)
     db.execute("CREATE TABLE IF NOT EXISTS shortlist (campaign_id TEXT, creator_id TEXT, added_at TEXT, "
                "PRIMARY KEY (campaign_id, creator_id))")
 
@@ -123,12 +120,25 @@ def go(view: str, creator: str | None = None) -> None:
         ss.creator = creator
 
 
-def group_weights(spec: CampaignSpec) -> dict[str, float]:
-    preset = ss.get("preset", spec.goal)
+def keep(store: str, default) -> dict:
+    """Widget kwargs that keep its value in a plain session key. Streamlit wipes a widget's own key on any run that
+    doesn't render it, so filters and ranking settings would otherwise reset after visiting another page."""
+    ss.setdefault(store, default)
+    widget = "_w_" + store
+    ss[widget] = ss[store]
+    return {"key": widget, "on_change": lambda: ss.update({store: ss[widget]})}
+
+
+def preset_of(spec: CampaignSpec, campaign_id: str) -> str:
+    return ss.get(f"preset_{campaign_id}") or spec.goal
+
+
+def group_weights(spec: CampaignSpec, campaign_id: str) -> dict[str, float]:
+    preset = preset_of(spec, campaign_id)
     w, _ = ranking.ahp_weights(ranking.AHP_PRESETS[preset])
     gw = {g: float(x) for g, x in zip(ranking.GROUPS, w)}
-    if ss.get("custom_weights"):
-        gw = {g: ss.get(f"w_{preset}_{g}", gw[g]) for g in ranking.GROUPS}
+    if ss.get(f"custom_{campaign_id}"):
+        gw = {g: ss.get(f"w_{campaign_id}_{preset}_{g}", gw[g]) for g in ranking.GROUPS}
     total = sum(gw.values()) or 1.0
     return {g: v / total for g, v in gw.items()}
 
@@ -144,7 +154,7 @@ def build_context(campaign: dict) -> dict:
     discoveries = pd.DataFrame(db.query("SELECT * FROM discoveries WHERE campaign_id=?", (cid_c,)))
     run_stats = next((json.loads(r["stats_json"]) for r in
                       db.query("SELECT stats_json FROM run_stats WHERE campaign_id=?", (cid_c,))), None)
-    gw = group_weights(spec)
+    gw = group_weights(spec, cid_c)
     weights = ranking.criterion_weights(gw)
     passed = {c: ranking.hard_filter(f) for c, f in feats.items()}
     ok_ids = [c for c, (p, _) in passed.items() if p]
@@ -221,28 +231,30 @@ def build_context(campaign: dict) -> dict:
 
 
 # ------------------------------------------------------------------ chrome
-def top_nav(n_short: int, campaign: dict | None) -> None:
-    left, *navs = st.columns([4.4, 1.25, 1.25, 1.45], vertical_alignment="center")
-    current = "discover" if ss.view == "analysis" else ss.view
-    with left:
-        context = ""
-        if campaign and current != "campaign":  # which report am I in? (easy to lose on the analysis page)
+def top_nav(n_short: int, campaign: dict | None, ctx_name: str | None = None) -> None:
+    """Logo + breadcrumb (where am I: Campaigns › campaign › creator) and a cart-style shortlist.
+    Campaigns is home, not a peer of Creators/Shortlist, so there is no three-item nav."""
+    inside = campaign is not None and ss.view != "campaign"
+    left, right = st.columns([5, 1.1], vertical_alignment="center")
+    with left, st.container(horizontal=True, vertical_alignment="center", gap="small", key="crumbs"):
+        html(ui.brand_header())
+        if inside:
             spec = CampaignSpec.model_validate_json(campaign["spec_json"])
-            where = COUNTRY.get(spec.target_country, spec.target_country)
-            context = (f'<div class="pn-context" title="{esc(spec.product)} · {esc(where)}"><span class="k">Campaign'
-                       f'</span><span class="v">{esc(spec.product)}</span><span class="m">{esc(where)}</span></div>')
-        html(f'<div class="pn-navbar">{ui.brand_header()}{context}</div>')
-    # a flow, not tabs: numbered steps, ✓ once a step is behind you, shortlist count only when there is one
-    done = {"campaign": campaign is not None, "discover": n_short > 0, "shortlist": False}
-    steps = [("campaign", "1", "Campaign"), ("discover", "2", "Creators"),
-             ("shortlist", "3", f"Shortlist ({n_short})" if n_short else "Shortlist")]
-    for col, (view, num, name) in zip(navs, steps):
-        with col:
-            k = ("navon-" if current == view else "nav-") + view
-            with st.container(key=k):
-                st.button(f"{'✓' if done[view] else num} · {name}", key=f"btn_{k}", on_click=go, args=(view,),
-                          width="stretch", disabled=(view != "campaign" and campaign is None))
-    html('<div class="pn-divider" style="margin:6px 0 22px"></div>')
+            label = f"{spec.product} · {spec.target_country}"
+            here = {"analysis": ctx_name, "shortlist": "Shortlist"}.get(ss.view)
+            sep = '<span class="pn-crumb-sep">›</span>'
+            st.button("Campaigns", key="crumb_home", type="tertiary", on_click=go, args=("campaign",))
+            html(sep)
+            if here:
+                st.button(label, key="crumb_campaign", type="tertiary", on_click=go, args=("discover",),
+                          help=label)
+                html(sep + f'<span class="pn-crumb-here">{esc(here)}</span>')
+            else:
+                html(f'<span class="pn-crumb-here" title="{esc(label)}">{esc(label)}</span>')
+    if inside:
+        with right, st.container(key="cart-on" if ss.view == "shortlist" else "cart"):
+            st.button(f"Shortlist ({n_short})" if n_short else "Shortlist", icon=":material/bookmark:",
+                      key="btn_cart", on_click=go, args=("shortlist",), width="stretch")
 
 
 # ------------------------------------------------------------------ campaign page
@@ -262,8 +274,6 @@ def stage_index(msg: str) -> int:
 
 
 def run_with_stages(spec: CampaignSpec, brief: str, seeds: list[str]) -> None:
-    ss.source = "live"
-    use_source()
     box = st.empty()
     state = {"i": 0}
 
@@ -326,8 +336,9 @@ def campaign_page(campaigns: list[dict]) -> None:
     # returning users with reports: the pitch shrinks to one line and their reports come first
     slim = bool(campaigns) and not running and not parse and ss.get("draft") is None
     if slim:
-        html('<div class="pn-hero-slim"><span class="t">Find the creators our gamers already watch.</span>'
-             '<span class="p">01 · Brief → 02 · Creators → 03 · Shortlist</span></div>')
+        with band:
+            html('<div class="pn-hero-slim"><span class="t">Find the creators our gamers already watch.</span>'
+                 '<span class="p">01 · Brief → 02 · Creators → 03 · Shortlist</span></div>')
         reports, form = st.columns([1.7, 1], gap="large")
         with reports:
             recent_campaigns(campaigns, n_cols=2)
@@ -345,8 +356,6 @@ def campaign_page(campaigns: list[dict]) -> None:
             if parse:
                 try:
                     with st.spinner("Reading the brief…"):
-                        ss.source = "live"
-                        use_source()
                         ss.draft = pipeline.parse_brief(LLMClient(config.LLM_MODELS), parse)
                         ss.draft_brief = parse
                         ss.draft_n = ss.get("draft_n", 0) + 1  # fresh widget keys for every new draft
@@ -428,14 +437,7 @@ def campaign_form(draft: CampaignSpec) -> None:
 
 def recent_campaigns(campaigns: list[dict], n_cols: int = 3) -> None:
     st.write("")
-    head, src = st.columns([3, 2], vertical_alignment="bottom")
-    head.markdown("#### Recent campaigns")
-    options = {"live": "Live data", "demo": "Offline demo"}
-    choice = src.segmented_control("Data source", list(options), format_func=options.get, default=ss.source,
-                                   label_visibility="collapsed", key="source_picker")
-    if choice and choice != ss.source:
-        ss.source, ss.campaign = choice, None
-        st.rerun()
+    st.markdown("#### Recent campaigns")
     if not campaigns:
         ui.empty_state("No campaigns yet.", "Describe a campaign above to find creators.")
         return
@@ -455,27 +457,22 @@ def recent_campaigns(campaigns: list[dict], n_cols: int = 3) -> None:
                  + (ui.chip(spec.price_segment) if spec.price_segment else "") + ui.chip(spec.goal.capitalize()))
             open_col, menu = st.columns([4, 1], vertical_alignment="center")
             open_col.button("Open →", key=f"open_{c['id']}", on_click=lambda i=c["id"]: (
-                ss.update(campaign=i, view="discover", creator=None)), width="stretch",
-)
+                ss.update(campaign=i, view="discover", creator=None)), width="stretch")
             with menu.popover("⋯", width="stretch"):
                 if st.button("Delete report", key=f"delete_{c['id']}", type="tertiary"):
-                    confirm_delete(c["id"], spec.product, ss.source)
+                    confirm_delete(c["id"], spec.product)
     if empty:
         st.toggle(f"Show reports without results ({len(empty)})", key="show_empty_reports")
 
 
 @st.dialog("Delete this report?")
-def confirm_delete(campaign_id: str, product: str, source: str) -> None:
+def confirm_delete(campaign_id: str, product: str) -> None:
     st.write(f'This will permanently remove the saved report for “{product}”.')
     st.caption("Other reports and their creator data will be kept.")
     cancel, delete = st.columns(2)
     if cancel.button("Cancel", width="stretch"):
         st.rerun()
     if delete.button("Delete", type="primary", width="stretch"):
-        if ss.source != source:
-            st.error("The data source changed. Close this dialog and select the report again.")
-            return
-        use_source()
         db.delete_campaign(campaign_id)
         if ss.get("campaign") == campaign_id:
             ss.campaign, ss.creator, ss.view = None, None, "campaign"
@@ -514,7 +511,11 @@ def top_picks(ctx: dict) -> None:
     vms = list(ctx["vms"].values())
     if len(vms) < 2:
         return
-    pool = [v for v in vms if not v["over_budget"]] or vms  # recommend what the budget allows
+    pool = [v for v in vms if not v["over_budget"]]  # only recommend what the budget allows
+    if not pool:
+        html(f'<div class="pn-note">No creator fits the budget of €{ctx["budget"]:,.0f} per video. '
+             'Raise it under Ranking priorities to get recommendations.</div>')
+        return
     fit = max(pool, key=lambda v: (v["groups"].get("Campaign Fit") or 0, v["score"]))
     reach = max(pool, key=lambda v: v["median_views"] or 0)
     priced = [v for v in pool if v["cost"]]
@@ -563,42 +564,45 @@ def compare_table(items: list[dict], ctx: dict, short: list[str]) -> None:
 
 def weights_controls(spec: CampaignSpec, campaign_id: str) -> None:
     presets = list(ranking.AHP_PRESETS)
-    ss.setdefault("preset", spec.goal)
-    store, widget = f"budget_{campaign_id}", f"budget_in_{campaign_id}"  # widget keys vanish on other pages
-    ss.setdefault(store, spec.budget_per_video)
-    ss[widget] = ss[store]
     with st.popover("Ranking priorities", width="stretch"):
-        st.number_input("Budget per video (€, 0 = no limit)", 0, 10_000_000, step=500, key=widget,
-                        on_change=lambda: ss.update({store: ss[widget]}),
+        st.number_input("Budget per video (€, 0 = no limit)", 0, 10_000_000, step=500,
+                        **keep(f"budget_{campaign_id}", spec.budget_per_video),
                         help="Creators whose cost proxy is above this are flagged and listed last. "
                              "The campaign score does not change.")
-        st.segmented_control("Campaign goal", presets, key="preset", format_func=str.capitalize)
-        w, cr = ranking.ahp_weights(ranking.AHP_PRESETS[ss.preset])
+        st.segmented_control("Campaign goal", presets, format_func=str.capitalize, required=True,
+                             **keep(f"preset_{campaign_id}", spec.goal))
+        preset = preset_of(spec, campaign_id)
+        w, cr = ranking.ahp_weights(ranking.AHP_PRESETS[preset])
         st.caption(f"AHP pairwise preset · consistency ratio {cr:.3f} {'(consistent)' if cr <= 0.1 else '(> 0.1!)'}")
-        st.toggle("Adjust weights manually", key="custom_weights")
+        st.toggle("Adjust weights manually", **keep(f"custom_{campaign_id}", False))
         for g, x in zip(ranking.GROUPS, w):
-            st.slider(GROUP_LABEL[g], 0.0, 1.0, float(round(x, 2)), 0.01, key=f"w_{ss.preset}_{g}",
-                      disabled=not ss.get("custom_weights"))
+            st.slider(GROUP_LABEL[g], 0.0, 1.0, step=0.01, disabled=not ss.get(f"custom_{campaign_id}"),
+                      **keep(f"w_{campaign_id}_{preset}_{g}", float(round(x, 2))))
 
 
 def discover_page(ctx: dict, short: list[str]) -> None:
     spec, vms = ctx["spec"], ctx["vms"]
     analysed = len(ctx["feats"])
-    html(f'<div class="pn-kicker">Creators</div><h2 style="margin:0 0 8px">{len(vms)} creators for '
+    with band:
+        html(f'<div class="pn-kicker">Creators</div><h2 style="margin:0 0 8px">{len(vms)} creators for '
          f'{esc(spec.product)}</h2>'
-         + ui.chip(COUNTRY.get(spec.target_country, spec.target_country), dark=True) + ui.chip(ctx["lang"])
-         + (ui.chip(spec.price_segment) if spec.price_segment else "")
-         + ui.chip(f"Goal: {ss.get('preset', spec.goal).capitalize()}")
-         + f'<span class="pn-subtle" style="margin-left:6px">{analysed} analysed · '
-           f'{analysed - len(vms)} filtered out</span>')
+             + ui.chip(COUNTRY.get(spec.target_country, spec.target_country), dark=True) + ui.chip(ctx["lang"])
+             + (ui.chip(spec.price_segment) if spec.price_segment else "")
+             + ui.chip(f"Goal: {preset_of(spec, ctx['campaign']['id']).capitalize()}")
+             + f'<span class="pn-subtle" style="margin-left:6px">{analysed} analysed · '
+               f'{analysed - len(vms)} filtered out</span>')
     f1, f2, f3, f4, f5, f6 = st.columns([1.4, 1.7, 1.1, 1.3, 1.2, 1.2], vertical_alignment="bottom")
-    query = f1.text_input("Search", placeholder="Search creators", label_visibility="collapsed")
-    conf_filter = f2.segmented_control("Confidence", ["All", "Medium+", "High"], default="All",
-                                       label_visibility="collapsed")
-    gems = f3.toggle("Hidden gems")
+    c = ctx["campaign"]["id"]  # filters survive a visit to a creator's analysis and back
+    query = f1.text_input("Search", placeholder="Search creators", label_visibility="collapsed",
+                          **keep(f"f_query_{c}", ""))
+    conf_filter = f2.segmented_control("Confidence", ["All", "Medium+", "High"], required=True,
+                                       label_visibility="collapsed", **keep(f"f_conf_{c}", "All"))
+    gems = f3.toggle("Hidden gems", **keep(f"f_gems_{c}", False))
     sort = f4.selectbox("Sort", ["Campaign score", "Audience relevance", "Median views", "Engagement",
-                                 "Subscribers", "Data confidence"], label_visibility="collapsed")
-    layout = f5.segmented_control("View", ["Cards", "Compare"], default="Cards", label_visibility="collapsed")
+                                 "Subscribers", "Data confidence"], label_visibility="collapsed",
+                        **keep(f"f_sort_{c}", "Campaign score"))
+    layout = f5.segmented_control("View", ["Cards", "Compare"], required=True, label_visibility="collapsed",
+                                  **keep(f"f_layout_{c}", "Cards"))
     with f6:
         weights_controls(spec, ctx["campaign"]["id"])
 
@@ -716,7 +720,6 @@ def community_block(comments: pd.DataFrame, f: dict, lang: str) -> None:
 
 def analysis_page(ctx: dict, cid: str, short: list[str]) -> None:
     vm = ctx["vms"].get(cid)
-    st.button("← Back to creators", on_click=go, args=("discover",))
     if vm is None:
         ui.empty_state("Creator not found in this ranking.", "Go back to the creator list.")
         return
@@ -883,12 +886,13 @@ def analysis_page(ctx: dict, cid: str, short: list[str]) -> None:
 
 # ------------------------------------------------------------------ shortlist page
 def shortlist_page(ctx: dict, short: list[str]) -> None:
-    html(f'<div class="pn-kicker">Shortlist</div><h2 style="margin:0 0 4px">{len(short)} creator'
-         f'{"s" if len(short) != 1 else ""} shortlisted</h2><div class="pn-muted" style="margin-bottom:18px">'
-         f'For {esc(ctx["spec"].product)} · {esc(COUNTRY.get(ctx["spec"].target_country, ctx["spec"].target_country))}'
-         f'</div>')
+    with band:
+        html(f'<div class="pn-kicker">Shortlist</div><h2 style="margin:0 0 4px">{len(short)} creator'
+             f'{"s" if len(short) != 1 else ""} shortlisted</h2><div class="pn-muted">'
+             f'For {esc(ctx["spec"].product)} · '
+             f'{esc(COUNTRY.get(ctx["spec"].target_country, ctx["spec"].target_country))}</div>')
     if not short:
-        ui.empty_state("Your shortlist is empty.", "Open Creators and add creators with “+ Shortlist”.")
+        ui.empty_state("Your shortlist is empty.", "Go back to the campaign and add creators with “+ Shortlist”.")
         return
     rows = []
     for cid in short:
@@ -935,14 +939,18 @@ def shortlist_page(ctx: dict, short: list[str]) -> None:
 
 
 # ------------------------------------------------------------------ router
-use_source()
+open_db()
 campaigns = list_campaigns()
 ids = [c["id"] for c in campaigns]
 if ss.get("campaign") not in ids:
     ss.campaign = ids[0] if ids else None
 current = next((c for c in campaigns if c["id"] == ss.campaign), None)
 short = shortlist_ids(current["id"]) if current else []
-top_nav(len(short), current)
+band = st.container(key="band")  # deep-green top band: nav + the page's title; pages add their heading to it
+with band:
+    top_nav(len(short), current,
+            ctx_name=(db.query("SELECT name FROM creators WHERE id=?", (ss.get("creator"),)) or [{}])[0].get("name")
+            if ss.view == "analysis" else None)
 
 if ss.view == "campaign" or current is None:
     campaign_page(campaigns)

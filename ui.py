@@ -107,12 +107,6 @@ div[class*="st-key-panel"] {{ background: {T['surface']}; border: 1px solid {T['
 /* while discovery runs, hide the stale form under the live stage list */
 div[class*="st-key-panel-campaign"] [data-stale="true"] {{ display: none; }}
 
-/* nav */
-div[class*="st-key-nav-"] button {{ border: none !important; background: transparent !important;
-  color: {T['text_muted']} !important; font-weight: 600; border-radius: 999px; }}
-div[class*="st-key-nav-"] button:hover {{ color: {T['text']} !important; background: {T['neutral_soft']} !important; }}
-div[class*="st-key-navon-"] button {{ background: {T['text']} !important; color: {T['cta_text']} !important;
-  border: none !important; font-weight: 600; border-radius: 999px; }}
 
 /* expanders / tabs */
 div[data-testid="stExpander"] details {{ border: 1px solid {T['border']}; border-radius: {T['radius']};
@@ -222,7 +216,6 @@ h1, h2, h3, h4, .pn-score .num, .pn-card-head .name {{ font-family:'Sora', sans-
 .stButton > button, .stDownloadButton > button, .stFormSubmitButton > button {{ border-radius:12px; min-height:44px; }}
 .stButton > button[kind="tertiary"] {{ border:none; background:transparent; color:#4A4A5D; padding:4px 0; min-height:32px; }}
 .stButton > button[kind="tertiary"]:hover {{ color:#BF000F; text-decoration:underline; }}
-div[class*="st-key-navon-"] button {{ background:#256F50 !important; color:white !important; }}
 div[class*="st-key-card"] {{ border-top:3px solid #A8C5B9; }}
 div[class*="st-key-card"]:hover {{ border-color:#256F50; box-shadow:0 8px 22px #1d1d3510; }}
 .pn-score {{ background:#EBFDEB; border:1px solid #A8C5B9; padding:12px; border-radius:16px; color:#256F50; }}
@@ -236,16 +229,43 @@ div[class*="st-key-card"]:hover {{ border-color:#256F50; box-shadow:0 8px 22px #
 .pn-steps .on .n {{ background:#256F50; color:white; }}
 .pn-chip.dark {{ background:#256F50; color:white; border-color:#256F50; }}
 .pn-stages li.done .st {{ color:white; }}
-div[class*="st-key-nav"] button p {{ white-space:nowrap; }}
 .pn-card-head .name {{ white-space:normal; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; }}
 .pn-bar.na .v {{ color:{T['text_subtle']}; font-weight:600; font-size:.75rem; }}
-/* top bar: brand + the campaign you are in */
-.pn-navbar {{ display:flex; align-items:center; gap:14px; min-width:0; }}
-.pn-context {{ display:flex; flex-direction:column; min-width:0; max-width:260px; line-height:1.25; }}
-.pn-context .k {{ font-size:.66rem; font-weight:700; letter-spacing:.1em; text-transform:uppercase; color:{T['text_subtle']}; }}
-.pn-context .v {{ font-weight:650; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }}
-.pn-context .m {{ font-size:.8rem; color:{T['text_muted']}; }}
-@media (max-width:1100px) {{ .pn-context {{ display:none; }} }}
+/* top bar: breadcrumb (Campaigns › campaign › creator) + cart-style shortlist */
+div[class*="st-key-crumbs"] {{ flex-wrap:nowrap; min-width:0; }}
+div[class*="st-key-crumbs"] .pn-brand {{ margin-right:10px; }}
+div[class*="st-key-crumbs"] .stButton > button[kind="tertiary"] {{ color:{T['text_muted']}; font-weight:600; min-height:32px;
+  padding:4px 2px; }}
+div[class*="st-key-crumbs"] .stButton > button[kind="tertiary"]:hover {{ color:{T['accent']}; text-decoration:underline; }}
+div[class*="st-key-crumb_campaign"] {{ min-width:0; max-width:300px; }}
+div[class*="st-key-crumb_campaign"] button {{ max-width:100%; }}
+div[class*="st-key-crumb_campaign"] button p {{ white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }}
+.pn-crumb-sep {{ color:{T['text_subtle']}; font-weight:600; margin:0 4px; }}
+.pn-crumb-here {{ font-weight:700; color:{T['text']}; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+  max-width:280px; display:inline-block; vertical-align:middle; }}
+div[class*="st-key-cart"] button {{ border-radius:999px !important; }}
+div[class*="st-key-cart-on"] button {{ border-color:#256F50 !important; background:#EBFDEB !important; color:#256F50 !important; }}
+@media (max-width:900px) {{ div[class*="st-key-crumbs"] .pn-brand .product {{ display:none; }} }}
+/* deep-green top band (Prenew hero): full-bleed behind nav + page title, light text inside */
+div[class*="st-key-band"] {{ background:#256F50; box-shadow:0 0 0 100vmax #256F50;
+  clip-path:inset(-100vmax -100vmax 0 -100vmax); padding:4px 0 26px; margin-bottom:26px; color:#fff; }}
+div[class*="st-key-band"] .pn-brand {{ background:transparent; padding:10px 0; }}
+div[class*="st-key-band"] .pn-brand .product {{ border-left-color:#518C73; }}
+div[class*="st-key-band"] h2 {{ color:#fff !important; }}
+div[class*="st-key-band"] .pn-kicker {{ color:#9DF69A; }}
+div[class*="st-key-band"] .pn-subtle, div[class*="st-key-band"] .pn-muted {{ color:#CFE9D6; }}
+div[class*="st-key-band"] .pn-chip {{ background:rgba(255,255,255,.08); border-color:rgba(255,255,255,.28); color:#fff; }}
+div[class*="st-key-band"] .pn-chip.dark {{ background:#9DF69A; border-color:#9DF69A; color:#1D1D35; }}
+div[class*="st-key-band"] .pn-hero-slim {{ background:transparent; padding:6px 0 0; margin:0; }}
+div[class*="st-key-band"] .stButton > button[kind="tertiary"] {{ color:#CFE9D6 !important; }}
+div[class*="st-key-band"] .stButton > button[kind="tertiary"]:hover {{ color:#9DF69A !important; }}
+div[class*="st-key-band"] .pn-crumb-here {{ color:#fff; }}
+div[class*="st-key-band"] .pn-crumb-sep {{ color:#7CA996; }}
+div[class*="st-key-band"] div[class*="st-key-cart"] button {{ background:transparent !important; color:#fff !important;
+  border-color:rgba(255,255,255,.45) !important; }}
+div[class*="st-key-band"] div[class*="st-key-cart"] button:hover {{ border-color:#9DF69A !important; color:#9DF69A !important; }}
+div[class*="st-key-band"] div[class*="st-key-cart-on"] button {{ background:#9DF69A !important; color:#1D1D35 !important;
+  border-color:#9DF69A !important; }}
 /* discover: one-line verdict above the cards */
 .pn-pick .k {{ font-size:.7rem; font-weight:700; letter-spacing:.1em; text-transform:uppercase; color:{T['accent']}; }}
 .pn-pick .n {{ font-family:'Sora',sans-serif; font-weight:700; font-size:1.15rem; margin:2px 0; }}
