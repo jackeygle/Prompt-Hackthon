@@ -1,4 +1,5 @@
-"""End-to-end pipeline: brief -> spec -> discovery -> cheap filter -> collection -> features -> ranking.
+"""End-to-end pipeline: brief -> spec -> YouTube + web discovery -> identity merge -> cheap filter ->
+collection -> text / comment / visual features -> hard filter -> AHP + TOPSIS.
 
 CLI:  python pipeline.py "Find creators for €600–900 refurbished gaming PCs targeting gamers in Germany"
 """
@@ -7,6 +8,7 @@ import logging
 import shutil
 import sqlite3
 import sys
+import time
 import uuid
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
@@ -16,10 +18,14 @@ import config
 import db
 import features as fx
 import ranking
+import vision
+import web_discovery as web
 import youtube as yt
 from collectors import LinkedAccountCollector, YouTubeCollector, extract_social_links
 from llm import LLMClient
-from models import CampaignSpec
+from llm import dead_models as llm_dead_models
+from llm import missing_keys as llm_missing_keys
+from models import CampaignSpec, CampaignSpecDraft
 
 log = logging.getLogger("pipeline")
 
@@ -27,22 +33,29 @@ SPEC_SYSTEM = """You turn a marketer's campaign brief into a structured campaign
 Interpret price ranges like '€600–900' as the PRODUCT price segment, not the campaign budget.
 Write exactly 6 diverse YouTube search queries a target-audience viewer would type, mostly in the
 target language (e.g. German for Germany), covering: buying advice, used/refurbished, budget builds,
-price-segment comparisons, benchmarks. Keep each query short (2-6 words)."""
+price-segment comparisons, benchmarks. Keep each query short (2-6 words).
+Also write 6 web_queries for discovering creators and their profiles on other platforms (see field description)."""
 
 
 def parse_brief(llm: LLMClient, brief: str) -> CampaignSpec:
-    return llm.extract(CampaignSpec, SPEC_SYSTEM, brief)
+    """LLM extracts a draft; creator constraints get defaults the user can edit before the run."""
+    draft = llm.extract(CampaignSpecDraft, SPEC_SYSTEM, brief)
+    if not draft.web_queries:
+        draft.web_queries = web.default_web_queries(CampaignSpec(**draft.model_dump()))
+    return CampaignSpec(**draft.model_dump(), min_subscribers=config.MIN_SUBSCRIBERS,
+                        max_subscribers=config.MAX_SUBSCRIBERS)
 
 
 def _video_row(v: dict) -> dict:
     s, stt, cd = v["snippet"], v.get("statistics", {}), v.get("contentDetails", {})
     num = lambda k: int(stt[k]) if k in stt else None
+    thumbs = s.get("thumbnails", {})
     return {"id": v["id"], "channel_id": s["channelId"], "title": s.get("title", ""),
             "description": s.get("description", ""), "published_at": s["publishedAt"],
             "duration_s": yt.iso_duration_s(cd.get("duration", "")), "views": num("viewCount"),
             "likes": num("likeCount"), "comments": num("commentCount"),
             "language": s.get("defaultAudioLanguage") or s.get("defaultLanguage"),
-            "thumbnail": (s.get("thumbnails", {}).get("medium") or {}).get("url")}
+            "thumbnail": (thumbs.get("high") or thumbs.get("medium") or {}).get("url")}
 
 
 def _save_content(rows: list[dict]) -> None:
@@ -66,27 +79,36 @@ class Progress:
 def run_campaign(brief: str, spec: CampaignSpec | None = None, seed_handles: list[str] | None = None,
                  progress=None) -> str:
     p = Progress(progress)
-    llm = LLMClient()
+    t0 = time.time()
+    llm = LLMClient(config.LLM_MODELS)
+    vlm = LLMClient(config.VLM_MODELS)
     yt.QuotaUsage.units = 0
+    yt.TranscriptStatus.reset()
+    web.TavilyUsage.calls = 0
+    errors: list[str] = []
     campaign_id = "c_" + uuid.uuid4().hex[:8]
 
-    # 1. Understand campaign
+    # 1. Understand campaign (normally already parsed + edited in the UI)
     p("Parsing campaign brief", 0.02)
     spec = spec or parse_brief(llm, brief)
     db.execute("INSERT INTO campaigns VALUES (?,?,?,?)", (campaign_id, brief, spec.model_dump_json(), db.now()))
 
-    # 2. Discovery: search videos, group by channel
+    # 2a. YouTube discovery: search videos, group by channel
     after = (datetime.now(timezone.utc) - timedelta(days=365)).strftime("%Y-%m-%dT00:00:00Z")  # day granularity keeps the cache key stable
     hits: Counter = Counter()
+    hit_queries: dict[str, set] = {}
     queries = spec.search_queries[:config.N_QUERIES]
     for i, q in enumerate(queries):
-        p(f"YouTube search: “{q}”", 0.05 + 0.10 * i / len(queries))
+        p(f"YouTube search: “{q}”", 0.04 + 0.08 * i / max(len(queries), 1))
         try:
             for item in yt.search_videos(q, spec.target_country, spec.target_language, after,
                                          config.SEARCH_RESULTS_PER_QUERY):
-                hits[item["snippet"]["channelId"]] += 1
+                cid = item["snippet"]["channelId"]
+                hits[cid] += 1
+                hit_queries.setdefault(cid, set()).add(q)
         except yt.YouTubeError as e:
             log.error("search failed for %r: %s", q, e)
+            errors.append(f"YouTube search: {e}")
             if e.reason == "quotaExceeded":
                 break
 
@@ -99,23 +121,39 @@ def run_campaign(brief: str, spec: CampaignSpec | None = None, seed_handles: lis
         except yt.YouTubeError as e:
             log.warning("seed %s: %s", h, e)
 
-    # 3. Cheap filter on channel metadata (free after 1 unit / 50 channels)
-    p(f"Loading {len(hits)} channels", 0.17)
+    p(f"Loading {len(hits)} channels", 0.13)
     chans = {c["id"]: c for c in yt.channels(list(hits))}
+
+    # 2b. Web / cross-platform discovery (Tavily). Optional: failures leave YouTube-only discovery intact.
+    web_matches: dict[str, list[dict]] = {}
+    web_only: list[dict] = []
+    n_identities = 0
+    if config.WEB_DISCOVERY_ENABLED:
+        identities, werr = web.discover(spec, llm, lambda m, f: p(m, 0.14 + 0.05 * f))
+        errors += [f"Web discovery: {e}" for e in werr]
+        n_identities = len(identities)
+        if identities:
+            p("Merging web identities with YouTube channels", 0.19)
+            web_matches, web_only = web.resolve_to_youtube(identities, chans)
+
+    # 3. Identity merge + cheap filter on channel metadata
     dach = {"DE", "AT", "CH"} if spec.target_country == "DE" else {spec.target_country}
+    web_hits = {cid: len(ids) for cid, ids in web_matches.items()}
     cands = []
     for cid, c in chans.items():
         stats, country = c.get("statistics", {}), c["snippet"].get("country")
         subs = int(stats.get("subscriberCount", 0))
         if cid not in seeds:
-            if not (config.MIN_SUBSCRIBERS <= subs <= config.MAX_SUBSCRIBERS):
+            if not (spec.min_subscribers <= subs <= spec.max_subscribers):
                 continue
             if country and country not in dach:
                 continue
-        cands.append((cid in seeds, hits[cid], subs, cid))
+        score = hits[cid] + 2 * web_hits.get(cid, 0)  # found on the web too -> stronger discovery signal
+        cands.append((cid in seeds, score, subs, cid))
     cands.sort(reverse=True)
     shortlist = [cid for *_, cid in cands[:config.N_AFTER_CHEAP_FILTER]]
-    p(f"Cheap filter: {len(chans)} → {len(shortlist)} channels", 0.2)
+    p(f"Cheap filter: {len(chans)} → {len(shortlist)} channels "
+      f"({sum(1 for c in shortlist if c in web_hits)} also found on the web)", 0.2)
 
     # 4. Uploads + LLM relevance classification per channel
     uploads: dict[str, list[dict]] = {}
@@ -136,16 +174,19 @@ def run_campaign(brief: str, spec: CampaignSpec | None = None, seed_handles: lis
                 fut.result()
             except Exception as e:
                 log.warning("scan failed: %s", e)
+                errors.append(f"Upload screening: {str(e)[:150]}")
             done += 1
-            p(f"Screening uploads ({done}/{len(shortlist)})", 0.2 + 0.25 * done / len(shortlist))
+            p(f"Screening uploads ({done}/{len(shortlist)})", 0.2 + 0.25 * done / max(len(shortlist), 1))
     for vids in uploads.values():
         _save_content(vids)
 
     deep = sorted([cid for cid in shortlist if cid in relevance and relevance[cid].relevant_ids],
-                  key=lambda c: (c in seeds, len(relevance[c].relevant_ids), hits[c]), reverse=True)[:config.N_DEEP]
+                  key=lambda c: (c in seeds, len(relevance[c].relevant_ids), hits[c] + 2 * web_hits.get(c, 0)),
+                  reverse=True)[:config.N_DEEP]
 
     # 5. Deep analysis per creator
     results: dict[str, dict] = {}
+    vlm_failures: list[str] = []
 
     def analyze(cid: str) -> None:
         ch = chans[cid]
@@ -153,8 +194,8 @@ def run_campaign(brief: str, spec: CampaignSpec | None = None, seed_handles: lis
         by_id = {v["id"]: v for v in uploads[cid]}
         rel = sorted((by_id[i] for i in relevance[cid].relevant_ids), key=lambda v: v["published_at"], reverse=True)
         top = rel[:config.VIDEOS_PER_CREATOR]
-        for v in top:
-            v["transcript"] = yt.transcript(v["id"])
+        for v in top:  # transcript if available, otherwise title + description only (never fabricated)
+            v["transcript"] = yt.transcript(v["id"], (spec.target_language, "en"))
             v["transcript_source"] = "unofficial" if v["transcript"] else None
         _save_content(top)
 
@@ -193,6 +234,17 @@ def run_campaign(brief: str, spec: CampaignSpec | None = None, seed_handles: lis
             f.update(cf)
         except Exception as e:
             log.warning("content features failed for %s: %s", title, e)
+
+        # Visual enrichment (optional): failure only lowers confidence
+        visual_tags = []
+        if config.VLM_ENABLED and vlm.available_models():
+            try:
+                vf, visual_tags = vision.analyze_creator(vlm, spec, top)
+                f.update(vf)
+            except Exception as e:
+                vlm_failures.append(f"{title}: {str(e)[:150]}")
+                log.warning("visual analysis failed for %s: %s", title, str(e)[:200])
+
         f.update({
             "n_analyzed_videos": len(top),
             "transcript_coverage": sum(bool(v.get("transcript")) for v in top) / max(len(top), 1),
@@ -201,10 +253,16 @@ def run_campaign(brief: str, spec: CampaignSpec | None = None, seed_handles: lis
             "comments_enabled": comments_available,
             "subscribers": subs,
             "search_hits": hits[cid],
+            "web_mentions": web_hits.get(cid, 0),
         })
-        links = extract_social_links(ch["snippet"].get("description", ""), *[v["description"] for v in top])
+        links = {k: (v, "description_link") for k, v in
+                 extract_social_links(ch["snippet"].get("description", ""), *[v["description"] for v in top]).items()}
+        for ident in web_matches.get(cid, []):
+            if ident["platform"] not in ("youtube", "unknown", "website") and ident["handle"]:
+                links.setdefault(ident["platform"], (ident["handle"], "tavily_web"))
         results[cid] = {"features": f, "evidence": evidence, "summary": summary, "links": links,
-                        "niche_label": relevance[cid].niche_label, "videos": [v["id"] for v in top]}
+                        "niche_label": relevance[cid].niche_label, "videos": [v["id"] for v in top],
+                        "visual_tags": visual_tags}
 
     done = 0
     with ThreadPoolExecutor(max(2, config.LLM_CONCURRENCY // 2)) as ex:
@@ -214,10 +272,11 @@ def run_campaign(brief: str, spec: CampaignSpec | None = None, seed_handles: lis
                 fut.result()
             except Exception as e:
                 log.exception("analysis failed for %s: %s", futs[fut], e)
+                errors.append(f"Analysis {futs[fut]}: {str(e)[:150]}")
             done += 1
             p(f"Deep analysis ({done}/{len(deep)})", 0.45 + 0.45 * done / max(len(deep), 1))
 
-    # 6. Persist creators, accounts, features, evidence
+    # 6. Persist creators, accounts, discoveries, features, evidence, visual tags
     p("Ranking", 0.92)
     for cid, r in results.items():
         ch = chans[cid]
@@ -231,10 +290,18 @@ def run_campaign(brief: str, spec: CampaignSpec | None = None, seed_handles: lis
                     "youtube_data_api", YouTubeCollector.source_reliability,
                     json.dumps({"thumbnail": (sn.get("thumbnails", {}).get("default") or {}).get("url"),
                                 "description": sn.get("description", "")[:500]}), db.now()))
-        for plat, handle in r["links"].items():
+        for plat, (handle, source) in r["links"].items():
             db.execute("INSERT OR IGNORE INTO platform_accounts VALUES (?,?,?,?,?,?,?,?,?,?)",
-                       (f"{plat}:{handle.lower()}", creator_id, plat, handle, None, None, "description_link",
+                       (f"{plat}:{handle.lower()}", creator_id, plat, handle, None, None, source,
                         LinkedAccountCollector.source_reliability, None, db.now()))
+        rows = [(campaign_id, creator_id, "youtube_search", "youtube", sn.get("customUrl"), q, None, None, "search")
+                for q in sorted(hit_queries.get(cid, []))]
+        rows += [(campaign_id, creator_id, "seed", "youtube", sn.get("customUrl"), None, None, None, "manual")
+                 for _ in [0] if cid in seeds]
+        rows += [(campaign_id, creator_id, "tavily_web", i["platform"], i["handle"] or i["name"], i["query"],
+                  i["source_url"], i["evidence"], i["method"]) for i in web_matches.get(cid, [])]
+        db.executemany("INSERT INTO discoveries (campaign_id, creator_key, source, platform, handle, query, url,"
+                       " evidence, method) VALUES (?,?,?,?,?,?,?,?,?)", rows)
         db.executemany("INSERT OR REPLACE INTO features VALUES (?,?,?,?,?,?)",
                        [(campaign_id, creator_id, k, float(v), _method(k), None)
                         for k, v in r["features"].items() if v is not None])
@@ -242,18 +309,46 @@ def run_campaign(brief: str, spec: CampaignSpec | None = None, seed_handles: lis
                        " VALUES (?,?,?,?,?,?)",
                        [(campaign_id, creator_id, e["feature"], e["video_id"], e["quote"], int(e["verified"]))
                         for e in r["evidence"]])
+        db.executemany("INSERT OR REPLACE INTO visual_tags VALUES (?,?,?,?,?)",
+                       [(campaign_id, creator_id, t["video_id"], t["url"], json.dumps(t)) for t in r["visual_tags"]])
         r["creator_id"] = creator_id
+
+    # Web-only creators: discovery evidence and profiles only (no metrics -> not ranked)
+    for w in web_only:
+        key = "web:" + web._norm(w["name"])
+        db.executemany("INSERT INTO discoveries (campaign_id, creator_key, source, platform, handle, query, url,"
+                       " evidence, method) VALUES (?,?,?,?,?,?,?,?,?)",
+                       [(campaign_id, key, "tavily_web", s_["platform"], w["profiles"].get(s_["platform"]) or w["name"],
+                         s_["query"], s_["source_url"], s_["evidence"], s_["method"]) for s_ in w["sources"]])
 
     # 7. Default ranking (the dashboard re-ranks live with other weights)
     rank_and_store(campaign_id, spec.goal, {r["creator_id"]: r for r in results.values()})
-    p(f"Done: {len(results)} creators analysed · {llm.calls} LLM calls ({llm.cache_hits} cached) · "
-      f"~{yt.QuotaUsage.units} YouTube quota units", 1.0)
+    stats = {
+        "duration_s": round(time.time() - t0, 1),
+        "youtube_quota_units": yt.QuotaUsage.units,
+        "tavily_calls": web.TavilyUsage.calls,
+        "text_llm_attempts": dict(llm.calls_by_model), "text_llm_cache_hits": llm.cache_hits,
+        "vlm_attempts": dict(vlm.calls_by_model), "vlm_cache_hits": vlm.cache_hits,
+        "transcripts": dict(yt.TranscriptStatus.counts), "transcripts_blocked": yt.TranscriptStatus.blocked,
+        "web_identities": n_identities, "web_matched_channels": len(web_matches), "web_only_creators": len(web_only),
+        "creators_analysed": len(results), "vlm_failures": vlm_failures[:10],
+        "disabled_models": llm_dead_models(),
+        "missing_env": sorted(set(llm_missing_keys(config.LLM_MODELS) + llm_missing_keys(config.VLM_MODELS)
+                                  + ([] if config.TAVILY_API_KEY else ["TAVILY_API_KEY"]))),
+        "errors": errors[:20],
+    }
+    db.execute("INSERT OR REPLACE INTO run_stats VALUES (?,?)", (campaign_id, json.dumps(stats)))
+    p(f"Done: {len(results)} creators analysed · {llm.calls} text-LLM calls ({llm.cache_hits} cached) · "
+      f"{vlm.calls} VLM calls · {web.TavilyUsage.calls} Tavily calls · ~{yt.QuotaUsage.units} YouTube quota units",
+      1.0)
     return campaign_id
 
 
 def _method(name: str) -> str:
     if name in fx.CONTENT_FEATURES:
         return "llm"
+    if name.startswith("visual_") or name == "n_visual_images":
+        return "vlm"
     if name in {"meaningful_ratio", "technical_question_ratio", "purchase_intent_ratio", "spam_ratio",
                 "target_lang_share", "n_classified_comments"}:
         return "llm_comments"
@@ -281,7 +376,7 @@ def rank_and_store(campaign_id: str, preset: str, extra: dict | None = None) -> 
     db.execute("DELETE FROM rankings WHERE campaign_id=?", (campaign_id,))
     for cid, f in feats.items():
         p_ok, reason = passed[cid]
-        n_imp = int(sum(res.loc[cid, f"imputed__{c}"] for c in weights)) if p_ok else 0
+        n_imp = int(sum(bool(res.loc[cid, f"imputed__{c}"]) for c in res.attrs["weights"])) if p_ok else 0
         conf = ranking.confidence(f, n_imp)
         meta = {k: v for k, v in previous.get(cid, {}).items() if k != "explain"}
         meta.update({k: v for k, v in (extra or {}).get(cid, {}).items() if k in ("summary", "niche_label", "videos")})

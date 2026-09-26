@@ -78,7 +78,7 @@ def test_hard_filter():
 def test_confidence_bounds():
     assert ranking.confidence({}) == 0.0
     full = {"n_analyzed_videos": 5, "transcript_coverage": 1, "n_classified_comments": 300,
-            "source_reliability": 1.0, "days_since_last_relevant": 0}
+            "source_reliability": 1.0, "days_since_last_relevant": 0, "n_visual_images": 4}
     assert ranking.confidence(full) == pytest.approx(1.0)
     assert ranking.confidence_label(0.5) == "Medium"
 
@@ -97,3 +97,18 @@ def test_social_links():
     links = extract_social_links("Folgt mir: https://www.tiktok.com/@pc_max und instagram.com/p/xyz "
                                  "https://instagram.com/pcmax.de twitch.tv/pcmax")
     assert links == {"tiktok": "pc_max", "instagram": "pcmax.de", "twitch": "pcmax"}
+
+
+def test_topsis_drops_low_coverage_criteria():
+    df = pd.DataFrame({"niche_relevance": [3, 2, 1, 2], "visual_product_share": [1.0, np.nan, np.nan, np.nan]},
+                      index=list("abcd"))
+    res = ranking.topsis(df, {"niche_relevance": 0.5, "visual_product_share": 0.5})
+    assert res.attrs["dropped"] == ["visual_product_share"]
+    assert "close__visual_product_share" not in res.columns
+    assert res.loc["a", "rank"] == 1
+
+
+def test_visual_weight_is_small_and_explicit():
+    w, _ = ranking.ahp_weights(ranking.AHP_PRESETS["conversion"])
+    cw = ranking.criterion_weights(dict(zip(ranking.GROUPS, w)))
+    assert 0 < cw["visual_product_share"] < 0.03

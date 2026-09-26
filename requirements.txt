@@ -8,4 +8,5 @@ streamlit>=1.40
 altair>=5
 youtube-transcript-api>=1.2
 pytest>=8
-# optional providers: openai, anthropic
+openai>=1.50            # Groq (OpenAI-compatible) + OpenAI vision
+# optional: anthropic

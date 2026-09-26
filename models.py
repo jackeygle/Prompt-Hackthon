@@ -5,7 +5,8 @@ from pydantic import BaseModel, Field
 
 
 # ---------- Campaign ----------
-class CampaignSpec(BaseModel):
+class CampaignSpecDraft(BaseModel):
+    """What the LLM extracts from the brief. The user reviews/edits it before the run starts."""
     product: str = Field(description="What is being promoted, e.g. 'refurbished gaming PCs'")
     product_keywords: list[str] = Field(description="Terms indicating product relevance, in German and English")
     niche: str = Field(description="Content niche creators should be in, e.g. 'PC gaming hardware'")
@@ -15,6 +16,48 @@ class CampaignSpec(BaseModel):
     audience: str = Field(description="Target audience description")
     goal: Literal["conversion", "awareness", "balanced"] = Field(description="Main campaign goal")
     search_queries: list[str] = Field(description="6 diverse YouTube search queries, mostly in the target language")
+    web_queries: list[str] = Field(default_factory=list, description=(
+        "6 web search queries to discover creators and their cross-platform profiles: 2 general queries "
+        "(e.g. lists of best creators in the niche/country), then one each starting with "
+        "'site:tiktok.com', 'site:instagram.com', 'site:twitch.tv', 'site:youtube.com'"))
+
+
+class CampaignSpec(CampaignSpecDraft):
+    """Draft + creator constraints set by the user (not by the LLM)."""
+    min_subscribers: int = 2_000
+    max_subscribers: int = 3_000_000
+
+
+# ---------- Web discovery ----------
+class WebCreatorMention(BaseModel):
+    name: str = Field(description="Creator / channel name as written in the source")
+    platform: Literal["youtube", "tiktok", "instagram", "twitch", "x", "website", "unknown"]
+    handle: str | None = Field(default=None, description="Handle without @ if explicitly present, else null")
+    source_index: int = Field(description="Index [n] of the search result where this creator is mentioned")
+    evidence: str = Field(description="Short verbatim snippet (<= 20 words) from that result naming the creator")
+
+
+class WebCreatorMentions(BaseModel):
+    creators: list[WebCreatorMention]
+
+
+# ---------- Visual analysis (VLM) ----------
+class ImageTags(BaseModel):
+    i: int = Field(description="Index of the image in the input order")
+    face_visible: bool = Field(description="A real human face is clearly visible")
+    product_category_visible: bool = Field(
+        description="The campaign's product category (given in the prompt) is physically visible")
+    product_demo: bool = Field(description="Hands-on use, building, unboxing, testing or comparing a physical product")
+    benchmark_or_screen_content: bool = Field(
+        description="Performance charts/benchmark bars or on-screen/in-game footage are shown")
+    text_heavy: bool = Field(description="Large overlay text dominates the image")
+    focus: Literal["product", "person", "mixed", "other"] = Field(description="Main visual focus")
+    production_quality: int = Field(ge=0, le=2, description="0 low / 1 average / 2 polished (lighting, composition)")
+    note: str = Field(description="<= 12 words describing what is shown")
+
+
+class VisualAnalysis(BaseModel):
+    images: list[ImageTags]
 
 
 # ---------- LLM extraction contracts ----------

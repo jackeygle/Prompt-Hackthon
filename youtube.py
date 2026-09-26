@@ -103,23 +103,50 @@ def iso_duration_s(d: str) -> int:
     return days * 86400 + h * 3600 + mi * 60 + s
 
 
+class TranscriptStatus:
+    """Per-run transcript bookkeeping. `blocked` stops further attempts once the network/IP is blocked."""
+    blocked = False
+    counts: dict[str, int] = {}
+
+    @classmethod
+    def reset(cls):
+        cls.blocked, cls.counts = False, {}
+
+    @classmethod
+    def note(cls, status: str):
+        cls.counts[status] = cls.counts.get(status, 0) + 1
+
+
 def transcript(video_id: str, langs=("de", "en")) -> str | None:
-    """Unofficial transcript fetch. Often blocked from cloud IPs; callers must handle None."""
+    """Unofficial transcript fetch (youtube-transcript-api). Never fabricated: returns None when unavailable.
+
+    Works from most residential connections; commonly blocked from cloud/datacenter IPs.
+    Only real "no transcript for this video" results are cached; network blocks are not.
+    """
     if not config.TRANSCRIPTS_ENABLED:
+        TranscriptStatus.note("disabled")
         return None
-    key = f"tr:{video_id}"
+    if TranscriptStatus.blocked:
+        TranscriptStatus.note("blocked")
+        return None
+    key = f"tr:{video_id}:{','.join(langs)}"
     if (hit := db.cache_get(key)) is not None:
+        TranscriptStatus.note("ok" if hit else "none")
         return hit or None
     try:
         from youtube_transcript_api import YouTubeTranscriptApi
         t = YouTubeTranscriptApi().fetch(video_id, languages=list(langs))
-        text = " ".join(s.text for s in t.snippets)
+        text = " ".join(s.text for s in t.snippets).strip()
     except Exception as e:
-        msg = str(e)
-        log.info("transcript %s unavailable: %s", video_id, msg[:120])
-        if "ProxyError" in type(e).__name__ or "Proxy" in msg or "IpBlocked" in type(e).__name__:
-            config.TRANSCRIPTS_ENABLED = False  # blocked environment: stop trying for this run
+        name, msg = type(e).__name__, str(e)
+        if name in ("RequestBlocked", "IpBlocked", "ProxyError", "ConnectionError", "ConnectTimeout") \
+                or "Proxy" in msg or "blocked" in msg.lower():
+            log.warning("transcripts blocked in this environment (%s); falling back to title+description", name)
+            TranscriptStatus.blocked = True
+            TranscriptStatus.note("blocked")
             return None
+        log.info("transcript %s unavailable: %s", video_id, name)
         text = ""
+    TranscriptStatus.note("ok" if text else "none")
     db.cache_put(key, text)
     return text or None

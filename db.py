@@ -39,6 +39,17 @@ CREATE TABLE IF NOT EXISTS rankings (
   passed_hard_filter INTEGER, filter_reason TEXT, breakdown_json TEXT,
   PRIMARY KEY (campaign_id, creator_id));
 
+-- where each creator was found (YouTube search, Tavily web result, seed); web-only creators have no creator row
+CREATE TABLE IF NOT EXISTS discoveries (
+  id INTEGER PRIMARY KEY, campaign_id TEXT, creator_key TEXT, source TEXT, platform TEXT, handle TEXT,
+  query TEXT, url TEXT, evidence TEXT, method TEXT);
+
+CREATE TABLE IF NOT EXISTS visual_tags (
+  campaign_id TEXT, creator_id TEXT, video_id TEXT, url TEXT, tags_json TEXT,
+  PRIMARY KEY (campaign_id, creator_id, video_id));
+
+CREATE TABLE IF NOT EXISTS run_stats (campaign_id TEXT PRIMARY KEY, stats_json TEXT);
+
 CREATE TABLE IF NOT EXISTS api_cache (key TEXT PRIMARY KEY, response TEXT, created_at TEXT);
 """
 

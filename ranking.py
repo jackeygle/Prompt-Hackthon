@@ -32,6 +32,8 @@ CRITERIA = [
     Criterion("product_comparison", "Content Credibility", "B", 0.15, "Product comparison"),
     Criterion("price_discussion", "Content Credibility", "B", 0.15, "Price discussion"),
     Criterion("purchase_recommendation", "Content Credibility", "B", 0.20, "Purchase recommendation"),
+    # VLM-derived, deliberately small: share of thumbnails showing the product category / hands-on demo
+    Criterion("visual_product_share", "Content Credibility", "B", 0.10, "Product visible in thumbnails (VLM)"),
     Criterion("meaningful_ratio", "Audience Quality", "B", 0.30, "Meaningful comments"),
     Criterion("technical_question_ratio", "Audience Quality", "B", 0.20, "Technical / question comments"),
     Criterion("purchase_intent_ratio", "Audience Quality", "B", 0.35, "Purchase-intent comments"),
@@ -40,7 +42,7 @@ CRITERIA = [
     Criterion("engagement_rate", "Reach & Performance", "B", 0.30, "Engagement rate"),
     Criterion("view_efficiency", "Reach & Performance", "B", 0.15, "Views / subscribers"),
     Criterion("view_cv", "Reach & Performance", "C", 0.15, "View volatility"),
-    Criterion("log_est_cost_eur", "Cost & Risk", "C", 0.50, "Estimated cost per video (log)"),
+    Criterion("log_est_cost_eur", "Cost & Risk", "C", 0.50, "Estimated Cost Proxy (assumed CPM, log)"),
     Criterion("spam_ratio", "Cost & Risk", "C", 0.25, "Spam / suspicious comments"),
     Criterion("days_since_last_relevant", "Cost & Risk", "C", 0.25, "Days since last relevant upload"),
 ]
@@ -135,7 +137,11 @@ def _prepare(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
 
 def topsis(df: pd.DataFrame, weights: dict[str, float]) -> pd.DataFrame:
     """df: rows = creators, columns = criteria names. Returns score, rank, and per-criterion closeness."""
-    cols = [c.name for c in CRITERIA if c.name in df.columns]
+    present = [c.name for c in CRITERIA if c.name in df.columns]
+    coverage = df[present].notna().mean() if len(df) else pd.Series(0.0, index=present)
+    # criteria known for too few candidates would be mostly imputed -> excluded, and reported
+    dropped = [c for c in present if coverage[c] < config.MIN_CRITERION_COVERAGE]
+    cols = [c for c in present if c not in dropped]
     X, imputed = _prepare(df[cols])
     w = np.array([weights[c] for c in cols])
     w = w / w.sum()
@@ -163,6 +169,7 @@ def topsis(df: pd.DataFrame, weights: dict[str, float]) -> pd.DataFrame:
         out[f"close__{c}"] = closeness[:, j]
         out[f"imputed__{c}"] = imputed[c].to_numpy()
     out.attrs["weights"] = dict(zip(cols, w))
+    out.attrs["dropped"] = dropped
     return out.sort_values("rank")
 
 
@@ -191,10 +198,12 @@ def confidence(f: dict, n_imputed: int = 0) -> float:
     stats_ok -= min(n_imputed, 4) * 0.125
     if not n_vid:
         stats_ok = 0.0
+    visual = min((f.get("n_visual_images") or 0) / config.VLM_IMAGES_PER_CREATOR, 1)
     c = (0.25 * min(n_vid / config.VIDEOS_PER_CREATOR, 1)
          + 0.20 * (f.get("transcript_coverage") or 0.0)
          + 0.20 * min((f.get("n_classified_comments") or 0) / 200, 1)
-         + 0.15 * (f.get("source_reliability") or 0.0)
+         + 0.10 * (f.get("source_reliability") or 0.0)
+         + 0.05 * visual
          + 0.10 * recency
          + 0.10 * max(stats_ok, 0.0))
     return round(float(min(max(c, 0.0), 1.0)), 3)
