@@ -27,7 +27,8 @@ ui.inject_css()
 
 LIVE_DB = config.DB_PATH
 DEMO_DB = config.ROOT / "data" / "demo.db"
-DEFAULT_BRIEF = "Find creators for €600–900 refurbished gaming PCs targeting gamers in Germany."
+DEFAULT_BRIEF = "Find creators for €600–900 refurbished gaming PCs targeting gamers in Germany."  # demo example only
+BRIEF_EXAMPLES = "e.g. “Sustainable running shoes for women in Sweden, €90–140” or “Vegan skincare for Gen Z in Finland”"
 COUNTRY = {"DE": "Germany", "AT": "Austria", "CH": "Switzerland", "FR": "France", "NL": "Netherlands",
            "SE": "Sweden", "FI": "Finland", "DK": "Denmark", "NO": "Norway", "US": "United States",
            "GB": "United Kingdom", "UK": "United Kingdom", "ES": "Spain", "IT": "Italy", "PL": "Poland"}
@@ -43,13 +44,13 @@ REASON = {
     "price_segment_relevance": ("Talks about the campaign price segment", "Little coverage of this price segment"),
     "target_lang_share": ("Strong {lang}-speaking audience signal", "Weak {lang}-speaking audience signal"),
     "first_hand_experience": ("Hands-on, first-hand product content", "Little hands-on content"),
-    "benchmark_discussion": ("Shows benchmarks & performance tests", "Few benchmarks shown"),
+    "benchmark_discussion": ("Shows tests and measurable results", "Few tests or measurable results"),
     "product_comparison": ("Compares products for viewers", "Few product comparisons"),
     "price_discussion": ("Discusses prices and value", "Rarely discusses prices"),
     "purchase_recommendation": ("Gives concrete buying advice", "Little buying advice"),
     "visual_product_share": ("Product visible in thumbnails", "Product rarely visible in thumbnails"),
     "meaningful_ratio": ("Substantive comment discussions", "Mostly generic comments"),
-    "technical_question_ratio": ("Technical, question-driven community", "Few technical questions"),
+    "technical_question_ratio": ("In-depth, question-driven community", "Few in-depth questions"),
     "purchase_intent_ratio": ("Viewers show purchase intent", "Little purchase intent in comments"),
     "creator_reply_rate": ("Actively replies to the community", "Rarely replies to comments"),
     "log_median_views": ("Strong reach on relevant videos", "Lower reach on relevant videos"),
@@ -62,10 +63,19 @@ REASON = {
 }
 EVIDENCE_KIND = {"niche_relevance": "Niche relevance", "product_relevance": "Product evidence",
                  "price_segment_relevance": "Price-segment evidence", "first_hand_experience": "Hands-on evidence",
-                 "benchmark_discussion": "Benchmark evidence", "price_discussion": "Price evidence",
+                 "benchmark_discussion": "Test & results evidence", "price_discussion": "Price evidence",
                  "product_comparison": "Comparison evidence", "purchase_recommendation": "Buying-advice evidence"}
-COMMENT_LABEL = {"purchase_intent": "Purchase intent", "technical": "Technical", "question": "Question",
+COMMENT_LABEL = {"purchase_intent": "Purchase intent", "technical": "In-depth / expert", "question": "Question",
                  "meaningful": "Meaningful", "generic": "Generic", "spam": "Suspicious / spam"}
+CRITERION_UI_LABEL = {"benchmark_discussion": "Tests & measurable results",
+                      "technical_question_ratio": "In-depth / question comments",
+                      "log_est_cost_eur": "Estimated cost proxy (assumed CPM, log)"}
+
+
+def crit_label(c) -> str:
+    return CRITERION_UI_LABEL.get(c.name, c.label)
+
+
 STAGES = ["Understanding campaign", "Searching YouTube", "Searching the web", "Screening candidates",
           "Analyzing content & communities", "Ranking candidates"]
 
@@ -172,9 +182,11 @@ def build_context(campaign: dict) -> dict:
     # Hidden gem: derived from existing numbers only (rule shown in the badge tooltip)
     subs = [v["subs"] for v in vms.values() if v["subs"]]
     med_subs = float(pd.Series(subs).median()) if subs else None
+    med_score = float(pd.Series([v["score"] for v in vms.values()]).median()) if vms else None
     for v in vms.values():
         fit = v["groups"].get("Campaign Fit")
-        v["gem"] = bool(med_subs and v["subs"] and fit is not None and fit >= 70 and v["subs"] < med_subs)
+        v["gem"] = bool(med_subs and v["subs"] and fit is not None and fit >= 75 and v["subs"] < med_subs
+                        and v["score"] >= med_score)
     return {"campaign": campaign, "spec": spec, "feats": feats, "res": res, "weights": weights, "used": used,
             "group_w": gw, "passed": passed, "vms": vms, "creators": creators, "discoveries": discoveries,
             "run_stats": run_stats, "lang": lang}
@@ -184,7 +196,7 @@ def build_context(campaign: dict) -> dict:
 def top_nav(n_short: int, has_campaign: bool) -> None:
     left, *navs = st.columns([5.2, 1.05, 1.05, 1.25], vertical_alignment="center")
     with left:
-        html('<div class="pc-brand"><span class="logo">prenew<span>.</span></span>'
+        html('<div class="pn-brand"><span class="logo">prenew<span>.</span></span>'
              '<span class="product">Creator Intelligence</span></div>')
     current = "discover" if ss.view == "analysis" else ss.view
     for col, (view, label) in zip(navs, [("campaign", "Campaign"), ("discover", "Discover"),
@@ -194,7 +206,7 @@ def top_nav(n_short: int, has_campaign: bool) -> None:
             with st.container(key=k):
                 st.button(label, key=f"btn_{k}", on_click=go, args=(view,), use_container_width=True,
                           disabled=(view != "campaign" and not has_campaign))
-    html('<div class="pc-divider" style="margin:6px 0 22px"></div>')
+    html('<div class="pn-divider" style="margin:6px 0 22px"></div>')
 
 
 # ------------------------------------------------------------------ campaign page
@@ -235,34 +247,34 @@ def run_with_stages(spec: CampaignSpec, brief: str, seeds: list[str]) -> None:
 def campaign_page(campaigns: list[dict]) -> None:
     hero, form = st.columns([1.05, 1], gap="large")
     with hero:
-        html('<div class="pc-hero"><div class="pc-kicker">Prenew Creator Intelligence</div>'
+        html('<div class="pn-hero"><div class="pn-kicker">Prenew Creator Intelligence</div>'
              '<h1>Find the right creators for your next campaign.</h1>'
              '<p>Discover and evaluate creators using content, community and campaign intelligence — '
              'then see exactly why each one is recommended.</p></div>')
         html('<div style="margin-top:26px">' + "".join(ui.chip(t) for t in [
             "YouTube data", "Web & social discovery", "Comment intelligence", "Evidence-backed scores"]) + "</div>")
-        html(f'<div class="pc-note" style="margin-top:22px;max-width:560px">Like choosing a PC by its specs: every '
-             f'creator is scored on the same campaign criteria — fit, community, performance and product '
-             f'evidence — ranked with AHP + TOPSIS. AI only extracts facts and evidence; it never picks the '
-             f'winner.</div>')
+        html('<div class="pn-note" style="margin-top:22px;max-width:560px">Works for any category — fashion, beauty, '
+             'food, sports, electronics. Every creator is compared on the same campaign criteria: fit, community, '
+             'performance and product evidence, ranked with AHP + TOPSIS. AI only extracts facts and evidence; '
+             'it never picks the winner.</div>')
     with form:
         running = ss.pop("run_request", None)
         draft: CampaignSpec | None = ss.get("draft")
         with st.container(key="panel-campaign"):
             html(ui.steps(2 if running else (1 if draft else 0)))
             if running:
-                html('<div class="pc-kicker">Finding creators for your campaign…</div>')
+                html('<div class="pn-kicker">Finding creators for your campaign…</div>')
                 try:
                     run_with_stages(*running)
                 except Exception as e:
                     st.error(f"Discovery failed: {e}")
                 return
             if draft is None:
-                html('<div class="pc-kicker">Campaign brief</div>')
+                html('<div class="pn-kicker">Campaign brief</div>')
                 brief = st.text_area("Campaign brief", ss.get("brief", DEFAULT_BRIEF), height=110,
                                      label_visibility="collapsed")
-                html('<div class="pc-subtle" style="margin:-4px 0 12px">Describe product, market, audience and '
-                     'price range in one sentence.</div>')
+                html(f'<div class="pn-subtle" style="margin:-4px 0 12px">Describe product, market, audience and '
+                     f'price range in one sentence — {BRIEF_EXAMPLES}.</div>')
                 if st.button("Continue →", type="primary", use_container_width=True):
                     ss.brief = brief
                     ss.source = "live"
@@ -280,7 +292,7 @@ def campaign_page(campaigns: list[dict]) -> None:
 
 
 def campaign_form(draft: CampaignSpec) -> None:
-    html('<div class="pc-kicker">Campaign</div>')
+    html('<div class="pn-kicker">Campaign</div>')
     product = st.text_input("Product", draft.product)
     a, b = st.columns(2)
     country = a.text_input("Market (country code)", draft.target_country,
@@ -304,7 +316,7 @@ def campaign_form(draft: CampaignSpec) -> None:
                          + ([] if config.TAVILY_API_KEY else ["TAVILY_API_KEY"])
                          + ([] if config.YOUTUBE_API_KEY else ["YOUTUBE_API_KEY"])))
     if missing:
-        html(f'<div class="pc-note">Missing keys, those enrichments will be skipped: {esc(", ".join(missing))}</div>')
+        html(f'<div class="pn-note">Missing keys, those enrichments will be skipped: {esc(", ".join(missing))}</div>')
     back, go_btn = st.columns([1, 2])
     if back.button("← Edit brief", use_container_width=True):
         ss.pop("draft", None)
@@ -337,7 +349,7 @@ def recent_campaigns(campaigns: list[dict]) -> None:
     for col, c in zip(cols, campaigns[:3]):
         spec = CampaignSpec.model_validate_json(c["spec_json"])
         with col, st.container(key=f"card-camp-{ui.key(c['id'])}"):
-            html(f'<div class="pc-subtle">{esc(c["created_at"][:16].replace("T", " "))}</div>'
+            html(f'<div class="pn-subtle">{esc(c["created_at"][:16].replace("T", " "))}</div>'
                  f'<div style="font-weight:700;margin:4px 0 8px">{esc(spec.product)}</div>'
                  + ui.chip(COUNTRY.get(spec.target_country, spec.target_country)) + ui.chip(spec.price_segment)
                  + ui.chip(spec.goal))
@@ -352,15 +364,15 @@ def creator_card(vm: dict, ctx: dict, shortlisted: bool) -> None:
         bars = "".join(ui.metric_bar(GROUP_LABEL[g], vm["groups"].get(g), accent=(g == "Campaign Fit"))
                        for g in CARD_GROUPS)
         plat = "YouTube" + (f" · {COUNTRY.get(vm['country'], vm['country'])}" if vm["country"] else "")
-        specs = ui.spec_tile("Median relevant views", ui.fmt_count(vm["median_views"])) + ui.spec_tile(
+        specs = ui.stat_tile("Median relevant views", ui.fmt_count(vm["median_views"])) + ui.stat_tile(
             "Purchase-intent comments", ui.pct(vm["purchase_intent"]))
         reasons = ui.reasons_list(vm["reasons"]) if vm["reasons"] else \
-            '<div class="pc-subtle" style="margin:10px 0">No standout strengths vs. other candidates.</div>'
-        html(f'<div class="pc-card-head">{ui.avatar(vm["name"], vm["avatar"])}<div class="who">'
-             f'<div class="pc-rank">#{vm["rank"]}</div><div class="name" title="{esc(vm["name"])}">{esc(vm["name"])}</div>'
+            '<div class="pn-subtle" style="margin:10px 0">No standout strengths vs. other candidates.</div>'
+        html(f'<div class="pn-card-head">{ui.avatar(vm["name"], vm["avatar"])}<div class="who">'
+             f'<div class="pn-rank">#{vm["rank"]}</div><div class="name" title="{esc(vm["name"])}">{esc(vm["name"])}</div>'
              f'<div class="meta">{esc(plat)} · {ui.fmt_count(vm["subs"])} subscribers</div></div>'
              f'{ui.score_block(vm["score"])}</div>'
-             f'<div style="margin:10px 0 4px">{badges}</div>{bars}<div class="pc-specs">{specs}</div>{reasons}')
+             f'<div style="margin:10px 0 4px">{badges}</div>{bars}<div class="pn-stats">{specs}</div>{reasons}')
         a, b = st.columns(2)
         a.button("View analysis", key=f"view_{vm['id']}", type="primary", on_click=go, args=("analysis", vm["id"]),
                  use_container_width=True)
@@ -384,8 +396,8 @@ def weights_controls(spec: CampaignSpec) -> None:
 def discover_page(ctx: dict, short: list[str]) -> None:
     spec, vms = ctx["spec"], ctx["vms"]
     n_web = sum(1 for v in vms.values() if v["web_platforms"])
-    html(f'<div class="pc-kicker">Discover</div><h2 style="margin:0 0 6px">{len(vms)} creators ranked for '
-         f'{esc(spec.product)}</h2><div class="pc-muted" style="margin-bottom:10px">'
+    html(f'<div class="pn-kicker">Discover</div><h2 style="margin:0 0 6px">{len(vms)} creators ranked for '
+         f'{esc(spec.product)}</h2><div class="pn-muted" style="margin-bottom:10px">'
          f'{len(ctx["feats"])} analysed in depth · scores are relative to this candidate set</div>'
          + ui.chip(COUNTRY.get(spec.target_country, spec.target_country), dark=True) + ui.chip("YouTube")
          + ui.chip(spec.price_segment) + ui.chip(ctx["lang"]) + ui.chip(f"Goal: {ss.get('preset', spec.goal)}")
@@ -430,19 +442,19 @@ def discover_page(ctx: dict, short: list[str]) -> None:
 
 def method_section(ctx: dict) -> None:
     st.write("")
-    html('<div class="pc-kicker" style="margin-top:18px">Behind the ranking</div>')
+    html('<div class="pn-kicker" style="margin-top:18px">Behind the ranking</div>')
     with st.expander("How the ranking works"):
         gw = ctx["group_w"]
-        html('<div class="pc-muted" style="margin-bottom:8px">Hard filters first (recent relevant uploads, niche '
+        html('<div class="pn-muted" style="margin-bottom:8px">Hard filters first (recent relevant uploads, niche '
              f'relevance, ≥{config.MIN_TARGET_LANG_SHARE:.0%} target-language comments). Then AHP weights five '
              'criterion groups and TOPSIS ranks creators by distance to the ideal candidate. Data confidence is '
              'computed separately and never changes the score.</div>')
         html("".join(ui.metric_bar(GROUP_LABEL[g], 100 * w, display=f"{w:.0%}") for g, w in gw.items()))
         if ctx["res"].attrs.get("dropped"):
-            html('<div class="pc-note">Not used in this ranking (known for &lt; '
+            html('<div class="pn-note">Not used in this ranking (known for &lt; '
                  f'{config.MIN_CRITERION_COVERAGE:.0%} of candidates): '
-                 + esc(", ".join(ranking.CRITERION_BY_NAME[c].label for c in ctx["res"].attrs["dropped"])) + "</div>")
-        html(f'<div class="pc-note" style="margin-top:8px"><b>Estimated Cost Proxy</b> = median relevant views × an '
+                 + esc(", ".join(crit_label(ranking.CRITERION_BY_NAME[c]) for c in ctx["res"].attrs["dropped"])) + "</div>")
+        html(f'<div class="pn-note" style="margin-top:8px"><b>Estimated Cost Proxy</b> = median relevant views × an '
              f'assumed €{config.ASSUMED_CPM_EUR:.0f} CPM. A comparison proxy — <b>not the creator\'s actual '
              f'quote</b>. Audience geography is not available from YouTube; target-language comment share is used '
              f'as a proxy.</div>')
@@ -479,20 +491,20 @@ def method_section(ctx: dict) -> None:
 
 # ------------------------------------------------------------------ creator analysis page
 def community_block(comments: pd.DataFrame, f: dict, lang: str) -> None:
-    html('<div class="pc-kicker">Community intelligence</div>')
+    html('<div class="pn-kicker">Community intelligence</div>')
     if comments.empty:
         ui.empty_state("No comments analysed.", "Comments may be disabled; this lowers data confidence.")
         return
     labeled = comments[comments.label.notna()]
     n = max(len(labeled), 1)
     share = lambda *ls: labeled.label.isin(ls).sum() / n
-    rows = [("Substantive discussion", f.get("meaningful_ratio")), ("Technical discussion", share("technical")),
+    rows = [("Substantive discussion", f.get("meaningful_ratio")), ("In-depth / expert discussion", share("technical")),
             ("Questions", share("question")), ("Purchase intent", share("purchase_intent")),
             ("Generic comments", share("generic")), ("Suspicious / spam", share("spam")),
             ("Creator response rate", f.get("creator_reply_rate")), (f"{lang}-language comments", f.get("target_lang_share"))]
     html("".join(ui.metric_bar(l, None if v is None else 100 * v, accent=l in ("Purchase intent",),
                                display=ui.pct(v)) for l, v in rows))
-    html(f'<div class="pc-subtle">{len(labeled)} comments classified from the analysed videos.</div>')
+    html(f'<div class="pn-subtle">{len(labeled)} comments classified from the analysed videos.</div>')
 
 
 def analysis_page(ctx: dict, cid: str, short: list[str]) -> None:
@@ -512,8 +524,8 @@ def analysis_page(ctx: dict, cid: str, short: list[str]) -> None:
             links = "".join(ui.chip(f"{p}: @{h}") for p, h in vm["others"].items())
             name = f'<a href="{esc(vm["url"])}" target="_blank" style="text-decoration:none">{esc(vm["name"])}</a>' \
                 if vm["url"] else esc(vm["name"])
-            html(f'<div class="pc-card-head">{ui.avatar(vm["name"], vm["avatar"], large=True)}<div class="who">'
-                 f'<div class="pc-rank">#{vm["rank"]} OF {len(ctx["vms"])}</div>'
+            html(f'<div class="pn-card-head">{ui.avatar(vm["name"], vm["avatar"], large=True)}<div class="who">'
+                 f'<div class="pn-rank">#{vm["rank"]} OF {len(ctx["vms"])}</div>'
                  f'<div style="font-size:1.9rem;font-weight:800;letter-spacing:-.03em">{name}</div>'
                  f'<div class="meta">YouTube · {esc(loc)} · {esc(vm["niche"])}</div>'
                  f'<div style="margin-top:8px">{ui.confidence_badge(vm["conf"], vm["conf_label"])}'
@@ -522,10 +534,10 @@ def analysis_page(ctx: dict, cid: str, short: list[str]) -> None:
         with mid:
             html(ui.score_block(vm["score"], "Campaign score", xl=True))
         with right:
-            html('<div class="pc-specs" style="grid-template-columns:1fr;margin:0">'
-                 + ui.spec_tile("Subscribers", ui.fmt_count(vm["subs"]))
-                 + ui.spec_tile("Median relevant views", ui.fmt_count(vm["median_views"]))
-                 + ui.spec_tile("Est. cost proxy (assumed CPM)", f"€{vm['cost']:,.0f}" if vm["cost"] else "–")
+            html('<div class="pn-stats" style="grid-template-columns:1fr;margin:0">'
+                 + ui.stat_tile("Subscribers", ui.fmt_count(vm["subs"]))
+                 + ui.stat_tile("Median relevant views", ui.fmt_count(vm["median_views"]))
+                 + ui.stat_tile("Est. cost proxy (assumed CPM)", f"€{vm['cost']:,.0f}" if vm["cost"] else "–")
                  + "</div>")
             sl = cid in short
             st.button("✓ Shortlisted" if sl else "+ Add to shortlist", type="secondary" if sl else "primary",
@@ -534,28 +546,28 @@ def analysis_page(ctx: dict, cid: str, short: list[str]) -> None:
                  f"transcripts {f.get('transcript_coverage', 0):.0%} · {int(f.get('n_classified_comments', 0))} "
                  f"comments · {int(f.get('n_visual_images', 0))} thumbnails. Confidence is shown separately and "
                  f"does not change the score.")
-    html(f'<div class="pc-subtle" style="margin:8px 2px 18px">{esc(conf_line)}</div>')
+    html(f'<div class="pn-subtle" style="margin:8px 2px 18px">{esc(conf_line)}</div>')
 
     # why
     why, summary = st.columns([1.1, 1], gap="large")
     with why:
         with st.container(key="panel-why"):
-            html('<div class="pc-kicker">Why this creator?</div>'
+            html('<div class="pn-kicker">Why this creator?</div>'
                  + "".join(ui.metric_bar(GROUP_LABEL[g], vm["groups"].get(g), accent=(g == "Campaign Fit"))
                            for g in ranking.GROUPS)
-                 + '<div class="pc-subtle" style="margin-top:6px">0–100 = closeness to the best candidate on each '
+                 + '<div class="pn-subtle" style="margin-top:6px">0–100 = closeness to the best candidate on each '
                    'criterion group, weighted by the campaign goal.</div>')
     with summary:
         with st.container(key="panel-sum"):
-            html('<div class="pc-kicker">Assessment</div>'
+            html('<div class="pn-kicker">Assessment</div>'
                  + (f'<div style="font-size:1.02rem;line-height:1.5">{esc(vm["summary"])}</div>'
-                    '<div class="pc-subtle" style="margin:4px 0 8px">AI summary of the analysed content</div>'
+                    '<div class="pn-subtle" style="margin:4px 0 8px">AI summary of the analysed content</div>'
                     if vm["summary"] else "")
                  + ui.reasons_list(vm["reasons"], vm["gaps"]))
 
     # evidence
     st.write("")
-    html('<div class="pc-kicker">Why we think this — evidence</div>')
+    html('<div class="pn-kicker">Why we think this — evidence</div>')
     ev = pd.DataFrame(db.query("SELECT feature, content_id, quote, verified FROM evidence WHERE campaign_id=? AND "
                                "creator_id=?", (campaign_id, cid)))
     vids = vm["videos"]
@@ -574,7 +586,7 @@ def analysis_page(ctx: dict, cid: str, short: list[str]) -> None:
     for r in vt[:2]:
         t = json.loads(r["tags_json"])
         tags = [lbl for k, lbl in [("product_category_visible", "Product visible"), ("product_demo", "Hands-on demo"),
-                                   ("benchmark_or_screen_content", "Benchmark / screen"),
+                                   ("benchmark_or_screen_content", "Results / on-screen"),
                                    ("face_visible", "Creator on camera")] if t.get(k)]
         cards.append(ui.evidence_card("Visual evidence · thumbnail", t.get("note", ""),
                                       f"Video: {titles.get(r['video_id'], r['video_id'])}",
@@ -587,7 +599,7 @@ def analysis_page(ctx: dict, cid: str, short: list[str]) -> None:
                 col.write("")
         dropped = int((ev.verified == 0).sum()) if not ev.empty else 0
         if dropped:
-            html(f'<div class="pc-subtle">{dropped} AI-cited quote(s) could not be found in the source text and were '
+            html(f'<div class="pn-subtle">{dropped} AI-cited quote(s) could not be found in the source text and were '
                  f'discarded; the related scores were lowered.</div>')
     else:
         ui.empty_state("Limited evidence available.", "This creator's score has lower confidence.")
@@ -601,7 +613,7 @@ def analysis_page(ctx: dict, cid: str, short: list[str]) -> None:
     with c1, st.container(key="panel-community"):
         community_block(comments, f, ctx["lang"])
     with c2:
-        html('<div class="pc-kicker">What the community says</div>')
+        html('<div class="pn-kicker">What the community says</div>')
         picks = []
         if not comments.empty:
             for label in ["purchase_intent", "technical", "question", "meaningful"]:
@@ -623,7 +635,7 @@ def analysis_page(ctx: dict, cid: str, short: list[str]) -> None:
     st.write("")
     with st.expander("All criteria — raw values, weights and closeness"):
         used = ctx["used"]
-        bd = pd.DataFrame([{"Group": GROUP_LABEL[c.group], "Criterion": c.label,
+        bd = pd.DataFrame([{"Group": GROUP_LABEL[c.group], "Criterion": crit_label(c),
                             "Type": "benefit" if c.kind == "B" else "cost", "Raw value": f.get(c.name),
                             "Closeness to ideal": res.loc[cid, f"close__{c.name}"] if c.name in used else None,
                             "Weight": used.get(c.name, 0.0),
@@ -650,8 +662,8 @@ def analysis_page(ctx: dict, cid: str, short: list[str]) -> None:
 
 # ------------------------------------------------------------------ shortlist page
 def shortlist_page(ctx: dict, short: list[str]) -> None:
-    html(f'<div class="pc-kicker">Shortlist</div><h2 style="margin:0 0 4px">{len(short)} creator'
-         f'{"s" if len(short) != 1 else ""} shortlisted</h2><div class="pc-muted" style="margin-bottom:18px">'
+    html(f'<div class="pn-kicker">Shortlist</div><h2 style="margin:0 0 4px">{len(short)} creator'
+         f'{"s" if len(short) != 1 else ""} shortlisted</h2><div class="pn-muted" style="margin-bottom:18px">'
          f'For {esc(ctx["spec"].product)} · {esc(COUNTRY.get(ctx["spec"].target_country, ctx["spec"].target_country))}'
          f'</div>')
     if not short:
@@ -664,7 +676,7 @@ def shortlist_page(ctx: dict, short: list[str]) -> None:
         with st.container(key=f"card-sl-{ui.key(cid)}"):
             a, b, c, d = st.columns([3.2, 1.2, 1.1, 1.1], vertical_alignment="center")
             if vm:
-                a.markdown(f'<div class="pc-card-head">{ui.avatar(name, vm["avatar"])}<div class="who">'
+                a.markdown(f'<div class="pn-card-head">{ui.avatar(name, vm["avatar"])}<div class="who">'
                            f'<div class="name">{esc(name)}</div><div class="meta">YouTube · '
                            f'{esc(COUNTRY.get(vm["country"], vm["country"] or "–"))} · {ui.fmt_count(vm["subs"])} '
                            f'subscribers</div><div style="margin-top:6px">'
@@ -683,7 +695,7 @@ def shortlist_page(ctx: dict, short: list[str]) -> None:
     if rows:
         st.download_button("Export shortlist (CSV)", pd.DataFrame(rows).to_csv(index=False).encode(),
                            file_name="prenew_creator_shortlist.csv", mime="text/csv")
-    html('<div class="pc-subtle" style="margin-top:10px">Next step: outreach — contact details are not collected by '
+    html('<div class="pn-subtle" style="margin-top:10px">Next step: outreach — contact details are not collected by '
          'this tool.</div>')
 
 

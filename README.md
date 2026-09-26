@@ -86,10 +86,12 @@ goes through `LLMClient.extract(schema, system, user, images=None)` with Pydanti
 
 ## UI / design system
 
+Design direction: Prenew-inspired clean Nordic commerce × AI intelligence, **category-agnostic** — the UI never
+depends on the marketed category (gaming, fashion, beauty, food, …); only campaign content changes.
 `ui.py` holds all design tokens (`TOKENS`), the global CSS and small render helpers (cards, score, confidence
 badge, metric bars, evidence cards, stage list). `.streamlit/config.toml` mirrors the main tokens for native widgets.
 The palette is a provisional Prenew-inspired one — replace the hex values in `TOKENS` (and the config file)
 with the brand's exact colours. Group scores on cards (Campaign fit, Community, Performance, Product evidence)
 are the weighted TOPSIS closeness per criterion group, relative to the ranked candidate set; **Hidden gem** =
-campaign fit ≥ 70 with fewer subscribers than the median ranked creator. Shortlists are stored per campaign in a
+campaign fit ≥ 75, campaign score ≥ median and fewer subscribers than the median ranked creator. Shortlists are stored per campaign in a
 `shortlist` table.
