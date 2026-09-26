@@ -355,33 +355,39 @@ def cost_estimate(n: int) -> str:
 def campaign_page(campaigns: list[dict]) -> None:
     running = ss.pop("run_request", None)
     parse = ss.pop("parse_request", None)
-    # returning users with reports: the pitch shrinks to one line and their reports come first
-    slim = bool(campaigns) and not running and not parse and ss.get("draft") is None
+    # parse first, so the page below already reflects the result (settings on success, the brief box on failure)
+    parse_error = None
+    if parse:
+        with st.spinner("Reading the brief…"):
+            try:
+                ss.draft = pipeline.parse_brief(LLMClient(config.LLM_MODELS), parse)
+                ss.draft_brief = parse
+                ss.draft_n = ss.get("draft_n", 0) + 1  # fresh widget keys for every new draft
+            except Exception as e:
+                miss = missing_keys(config.LLM_MODELS)
+                parse_error = f"Could not read the brief: {e}" + (f" (missing: {', '.join(miss)})" if miss else "")
+        parse = None
+    # step 1 (describe) is the centered search home; steps 2-3 (confirm, discover) get a one-line band title and a
+    # single centered column, so the current task is the only thing on the page
+    slim = not running and not parse and ss.get("draft") is None
     if slim:
         with band:
             html('<div class="pn-hero-slim pn-center"><div class="t">Find the creators our gamers already watch.</div>'
                  '<div class="p">01 · Brief <span>→</span> 02 · Creators <span>→</span> 03 · Shortlist</div></div>')
             form = st.container(key="briefbar")
     else:
-        hero, form = st.columns([1, 1.1], gap="large")
-        with hero:
-            html('<div class="pn-hero"><div class="pn-kicker">Prenew Creator Intelligence</div>'
-                 '<h1>Find the creators our gamers already watch.</h1>'
-                 '<p>Describe the campaign. We find, evaluate and rank relevant gaming and tech creators — '
-                 'with the evidence behind every recommendation.</p>'
-                 '<div class="pn-hero-proof"><span>01 · Brief</span><span>02 · Creators</span>'
-                 '<span>03 · Shortlist</span></div></div>')
+        title = ("Finding creators…" if running else "Reading your brief…" if parse
+                 else "Confirm campaign details")
+        with band:
+            st.button("All campaigns", key="crumb_new", type="tertiary", icon=":material/arrow_back:",
+                      on_click=_discard_draft, disabled=bool(running or parse))
+            band_title(title, meta="Step 3 of 3 · this usually takes a few minutes" if running
+                       else "Step 2 of 3 · review what we understood, then create the campaign")
+        form = st.container(key="stepwrap")
     with form:
         with st.container(key="panel-campaign"):
-            if parse:
-                try:
-                    with st.spinner("Reading the brief…"):
-                        ss.draft = pipeline.parse_brief(LLMClient(config.LLM_MODELS), parse)
-                        ss.draft_brief = parse
-                        ss.draft_n = ss.get("draft_n", 0) + 1  # fresh widget keys for every new draft
-                except Exception as e:
-                    miss = missing_keys(config.LLM_MODELS)
-                    st.error(f"Could not read the brief: {e}" + (f" (missing: {', '.join(miss)})" if miss else ""))
+            if parse_error:
+                st.error(parse_error)
             if running:
                 html(ui.steps(2) + '<div class="pn-kicker">Finding creators…</div>')
                 try:
@@ -420,7 +426,8 @@ def campaign_page(campaigns: list[dict]) -> None:
             else:
                 html(ui.steps(1))
                 campaign_form(ss.draft)
-    recent_campaigns(campaigns, overlap=slim)
+    if slim:
+        recent_campaigns(campaigns, overlap=True)
 
 
 def campaign_form(draft: CampaignSpec) -> None:

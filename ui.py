@@ -525,6 +525,10 @@ div[class*="st-key-card-cr-"] .pn-scorewrap {{ align-items:center; }}
 }}
 @keyframes pnmesh {{ to {{ background-position:130px 65px; }} }}
 @media (prefers-reduced-motion:reduce) {{ div[class*="st-key-band"]::before {{ animation:none !important; }} }}
+/* steps 2-3: one centered column under a one-line band title */
+div[class*="st-key-stepwrap"] {{ max-width:860px; margin:0 auto; width:100%; }}
+div[class*="st-key-band"] div[class*="st-key-crumb_new"] {{ margin-top:14px; }}
+div[class*="st-key-band"] div[class*="st-key-crumb_new"] button {{ color:#CFE9D6 !important; }}
 </style>""", unsafe_allow_html=True)
 
 
