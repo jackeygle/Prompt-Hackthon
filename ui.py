@@ -309,12 +309,19 @@ div[class*="st-key-band"]::after {{ content:""; position:absolute; left:-100vmax
 div[class*="st-key-band"] > div {{ position:relative; z-index:1; }}
 /* campaign home: pitch left, the brief box is the hero on the right */
 div[class*="st-key-band"] .pn-hero-slim {{ display:block; padding:18px 0 8px; }}
-div[class*="st-key-band"] .pn-hero-slim .t {{ font-size:clamp(1.9rem,3vw,2.6rem); line-height:1.12; font-weight:800;
-  letter-spacing:-.03em; margin:4px 0 14px; }}
+div[class*="st-key-band"] .pn-hero-slim .t {{ font-size:clamp(1.8rem,2.8vw,2.4rem); line-height:1.12; font-weight:800;
+  letter-spacing:-.03em; margin:6px 0 8px; }}
 div[class*="st-key-band"] .pn-hero-slim .p {{ color:var(--pn-lime); font-size:.82rem; letter-spacing:.02em; }}
 div[class*="st-key-band"] .pn-hero-slim .p span {{ opacity:.55; margin:0 4px; }}
-div[class*="st-key-band"] div[class*="st-key-panel-campaign"] {{ background:#fff; border:none; border-radius:20px;
-  box-shadow:0 22px 48px rgba(10,30,20,.28); padding:20px 22px 16px; color:var(--pn-navy); margin:10px 0 6px; }}
+/* home brief = search bar: no card around it, one rounded input + the CTA on the same row */
+div[class*="st-key-briefbar"] div[class*="st-key-panel-campaign"] {{ background:transparent; border:none;
+  box-shadow:none; padding:0; margin:6px 0 4px; max-width:980px; }}
+div[class*="st-key-briefbar"] .stTextArea textarea {{ border-radius:16px !important; border:none !important;
+  font-size:1.05rem; padding:14px 18px; min-height:68px; box-shadow:0 6px 18px rgba(10,30,20,.18); }}
+div[class*="st-key-briefbar"] .stTextArea [data-baseweb="textarea"] {{ border:none !important; border-radius:16px !important;
+  background:transparent !important; }}
+div[class*="st-key-briefbar"] .stFormSubmitButton > button {{ min-height:68px; border-radius:16px; font-size:1.02rem; }}
+.pn-brief-ex {{ color:#CFE9D6; font-size:.82rem; margin:2px 2px 0; }}
 div[class*="st-key-band"] div[class*="st-key-panel-campaign"] .pn-kicker {{ color:var(--pn-green); }}
 div[class*="st-key-band"] div[class*="st-key-panel-campaign"] .pn-subtle {{ color:{T['text_subtle']}; }}
 .stFormSubmitButton > button[kind^="primary"] p, .stButton > button[kind^="primary"] p {{ font-weight:700; }}
@@ -366,6 +373,36 @@ div[class*="st-key-card-cr-"] .pn-score .num {{ font-size:1.7rem; }}
 div[class*="st-key-card-cr-"] .pn-score .lbl {{ font-size:.58rem; }}
 div[class*="st-key-card-cr-"] .pn-score .num small {{ color:var(--pn-green); }}
 div[class*="st-key-card-cr-"] .pn-score .lbl {{ color:var(--pn-navy); opacity:.75; }}
+/* ===== step 2: icons, tiers, boot log ===== */
+.pn-ico {{ display:inline-block; vertical-align:-2px; flex:none; }}
+.pn-pchip {{ gap:6px; }}
+.pn-stat .k .pn-ico {{ margin-right:4px; opacity:.8; }}
+.pn-rank .pn-ico {{ margin:0 3px 0 1px; }}
+.pn-scorewrap {{ display:flex; align-items:stretch; gap:6px; flex:none; }}
+.pn-tier {{ display:inline-flex; align-items:center; justify-content:center; width:30px; min-height:30px;
+  border-radius:9px; font-family:var(--pn-mono); font-weight:700; font-size:1.05rem; line-height:1; cursor:help; }}
+.pn-tier.lg {{ width:46px; font-size:1.6rem; border-radius:12px; }}
+.pn-tier.t-s {{ background:var(--pn-lime); color:var(--pn-navy); box-shadow:inset 0 0 0 2px #7BE278; }}
+.pn-tier.t-a {{ background:var(--pn-green); color:#fff; }}
+.pn-tier.t-b {{ background:transparent; color:#DADAE6; box-shadow:inset 0 0 0 2px #6E6E8A; }}
+.pn-tier.t-c {{ background:transparent; color:#8B8BA3; box-shadow:inset 0 0 0 2px #4A4A63; }}
+div[class*="st-key-panel-head"] .pn-tier.t-b, div[class*="st-key-card-sl-"] .pn-tier.t-b {{ color:var(--pn-navy);
+  box-shadow:inset 0 0 0 2px var(--pn-navy); }}
+div[class*="st-key-panel-head"] .pn-tier.t-c, div[class*="st-key-card-sl-"] .pn-tier.t-c {{ color:#777786;
+  box-shadow:inset 0 0 0 2px #A9AABC; }}
+.pn-boot {{ background:var(--pn-navy); border-radius:16px; padding:18px 20px; font-family:var(--pn-mono);
+  font-size:.86rem; color:#B9BACB; background-image:radial-gradient(rgba(157,246,154,.08) 1.1px, transparent 1.4px);
+  background-size:11px 11px; border-bottom:3px solid var(--pn-lime); }}
+.pn-boot .hd {{ color:var(--pn-lime); font-weight:700; letter-spacing:.06em; font-size:.74rem; margin-bottom:10px; }}
+.pn-boot .ln {{ display:flex; gap:12px; align-items:baseline; padding:4px 0; white-space:nowrap; }}
+.pn-boot .tag {{ flex:none; width:52px; white-space:pre; }}
+.pn-boot .ok .tag {{ color:var(--pn-lime); font-weight:700; }}
+.pn-boot .ok .s {{ color:#E6E6EF; }}
+.pn-boot .run .tag, .pn-boot .run .s {{ color:#fff; font-weight:700; }}
+.pn-boot .wait {{ color:#5E5E78; }}
+.pn-boot .d {{ color:#9DA0B8; overflow:hidden; text-overflow:ellipsis; }}
+.pn-boot .cur {{ color:var(--pn-lime); animation:pnblink 1s steps(1) infinite; }}
+@keyframes pnblink {{ 50% {{ opacity:0; }} }}
 </style>""", unsafe_allow_html=True)
 
 
@@ -450,10 +487,11 @@ def metric_bar(label: str, value: float | None, accent: bool = False, display: s
             f'</div></div>')
 
 
-def stat_tile(k: str, v: str, hint: str = "") -> str:
+def stat_tile(k: str, v: str, hint: str = "", ico: str | None = None) -> str:
     """Small key figure (label + value), used on creator cards and the analysis header."""
     title = f' title="{esc(hint)}"' if hint else ""
-    return f'<div class="pn-stat"{title}><div class="k">{esc(k)}</div><div class="val">{esc(v)}</div></div>'
+    lead = icon(ico) if ico else ""
+    return f'<div class="pn-stat"{title}><div class="k">{lead}{esc(k)}</div><div class="val">{esc(v)}</div></div>'
 
 
 def reasons_list(good: list[str], gaps: list[str] | None = None) -> str:
@@ -489,3 +527,80 @@ def steps(active: int) -> str:
     return '<div class="pn-steps">' + "".join(
         f'<span class="{"on" if i <= active else ""}"><span class="n">{i + 1}</span>{n}</span>'
         for i, n in enumerate(names)) + "</div>"
+
+
+# ------------------------------------------------------------------ step 2: icons, tiers, boot-log loader
+PLATFORM_SVG = {  # simplified platform glyphs (inline, no network)
+    "youtube": '<rect x="2" y="5" width="20" height="14" rx="4" fill="#FF0033"/><path d="M10 9l5 3-5 3z" fill="#fff"/>',
+    "tiktok": '<path d="M14.5 3h2.6a4.4 4.4 0 0 0 3.4 3.4V9a7 7 0 0 1-3.4-1v6.6A5.6 5.6 0 1 1 11.5 9v2.8a2.9 2.9 0 1 0 '
+              '3 2.9z" fill="#111"/>',
+    "instagram": '<rect x="3" y="3" width="18" height="18" rx="5" fill="none" stroke="#E1306C" stroke-width="2"/>'
+                 '<circle cx="12" cy="12" r="4" fill="none" stroke="#E1306C" stroke-width="2"/>'
+                 '<circle cx="17.3" cy="6.7" r="1.3" fill="#E1306C"/>',
+    "twitch": '<path d="M4 3h16v11l-4 4h-4l-3 3v-3H4z" fill="#9146FF"/><path d="M11 7h1.8v4H11zm4 0h1.8v4H15z" fill="#fff"/>',
+    "x": '<path d="M4 4l16 16M20 4L4 20" stroke="#111" stroke-width="2.4" stroke-linecap="round"/>',
+    "facebook": '<circle cx="12" cy="12" r="10" fill="#1877F2"/><path d="M13 8h2V5.5h-2.2C10.7 5.5 10 7 10 8.7V10H8v2.6h2V19'
+                'h3v-6.4h2.2l.4-2.6H13V9c0-.6.3-1 1-1z" fill="#fff"/>',
+}
+PLATFORM_NAME = {"youtube": "YouTube", "tiktok": "TikTok", "instagram": "Instagram", "twitch": "Twitch", "x": "X",
+                 "facebook": "Facebook"}
+ICON_SVG = {  # outline metric icons, drawn in currentColor
+    "users": '<path d="M16 19v-1a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v1"/><circle cx="9" cy="7" r="3.5"/>'
+             '<path d="M22 19v-1a4 4 0 0 0-3-3.9M16 3.3a3.5 3.5 0 0 1 0 6.9"/>',
+    "eye": '<path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/>',
+    "euro": '<path d="M17 6.5A6.5 6.5 0 1 0 17 17.5M4 10h9M4 14h9"/>',
+    "pulse": '<path d="M2 12h4l3-8 4 16 3-8h6"/>',
+}
+
+
+def platform_icon(platform: str, size: int = 14) -> str:
+    body = PLATFORM_SVG.get(platform.lower())
+    if not body:
+        return ""
+    return f'<svg class="pn-ico" width="{size}" height="{size}" viewBox="0 0 24 24" aria-hidden="true">{body}</svg>'
+
+
+def platform_chip(platform: str, handle: str) -> str:
+    name = PLATFORM_NAME.get(platform.lower(), platform)
+    return (f'<span class="pn-chip pn-pchip" title="{esc(name)}">{platform_icon(platform)}'
+            f'<span>@{esc(handle)}</span></span>')
+
+
+def icon(name: str, size: int = 12) -> str:
+    return (f'<svg class="pn-ico" width="{size}" height="{size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" '
+            f'stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">{ICON_SVG[name]}</svg>')
+
+
+TIER_RULE = ("Tier within this campaign, by campaign score: S = top 15%, A = next 25%, B = next 35%, C = rest. "
+             "Relative to these candidates, not an absolute quality grade.")
+
+
+def tier_of(rank: int, n: int) -> str:
+    """Percentile tier from the deterministic ranking (never from an AI judgement)."""
+    for tier, share in (("S", .15), ("A", .40), ("B", .75)):
+        if rank <= max(1, round(share * n)):
+            return tier
+    return "C"
+
+
+def tier_badge(tier: str, large: bool = False) -> str:
+    return (f'<span class="pn-tier t-{tier.lower()}{" lg" if large else ""}" title="{esc(TIER_RULE)}" '
+            f'aria-label="Tier {tier}">{tier}</span>')
+
+
+def boot_log(stages: list[str], current: int, detail: str = "") -> str:
+    """Staged loader styled like a PC's power-on self test; every line is a real pipeline stage."""
+    lines = []
+    for i, s in enumerate(stages):
+        if i < current:
+            tag, cls = "[ OK ]", "ok"
+        elif i == current:
+            tag, cls = "[ .. ]", "run"
+        else:
+            tag, cls = "[    ]", "wait"
+        d = f'<span class="d">{esc(detail)}</span>' if i == current and detail else ""
+        cur = '<span class="cur">▌</span>' if i == current else ""
+        lines.append(f'<div class="ln {cls}"><span class="tag">{tag}</span><span class="s">{esc(s)}</span>{d}{cur}</div>')
+    done = current >= len(stages)
+    head = "PRENEW CREATOR INTELLIGENCE · " + ("DISCOVERY COMPLETE" if done else "RUNNING DISCOVERY")
+    return f'<div class="pn-boot"><div class="hd">{head}</div>{"".join(lines)}</div>'

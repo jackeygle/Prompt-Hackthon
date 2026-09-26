@@ -225,6 +225,7 @@ def build_context(campaign: dict) -> dict:
         fit = v["groups"].get("Campaign Fit")
         v["gem"] = bool(med_subs and v["subs"] and fit is not None and fit >= 75 and v["subs"] < med_subs
                         and v["score"] >= med_score)
+        v["tier"] = ui.tier_of(v["rank"], len(vms))
     return {"campaign": campaign, "spec": spec, "feats": feats, "res": res, "weights": weights, "used": used,
             "group_w": gw, "passed": passed, "vms": vms, "creators": creators, "discoveries": discoveries,
             "run_stats": run_stats, "lang": lang, "budget": budget}
@@ -283,9 +284,9 @@ def run_with_stages(spec: CampaignSpec, brief: str, seeds: list[str]) -> None:
     def cb(msg: str, _frac: float) -> None:
         state["i"] = max(state["i"], stage_index(msg))
         detail = msg.split(":", 1)[-1].strip() if ":" in msg else msg
-        box.markdown(ui.stage_list(STAGES, state["i"], detail[:60]), unsafe_allow_html=True)
+        box.markdown(ui.boot_log(STAGES, state["i"], detail[:60]), unsafe_allow_html=True)
 
-    box.markdown(ui.stage_list(STAGES, 0, "Preparing"), unsafe_allow_html=True)
+    box.markdown(ui.boot_log(STAGES, 0, "Preparing"), unsafe_allow_html=True)
     cid = pipeline.run_campaign(brief, spec=spec, seed_handles=seeds, progress=cb)
     ss.campaign, ss.view, ss.creator = cid, "discover", None
     ss.pop("draft", None)
@@ -340,11 +341,9 @@ def campaign_page(campaigns: list[dict]) -> None:
     slim = bool(campaigns) and not running and not parse and ss.get("draft") is None
     if slim:
         with band:
-            pitch, form = st.columns([1, 1.35], gap="large", vertical_alignment="center")
-            with pitch:
-                html('<div class="pn-hero-slim"><div class="pn-kicker">New campaign</div>'
-                     '<div class="t">Find the creators our gamers already watch.</div>'
-                     '<div class="p">01 · Brief <span>→</span> 02 · Creators <span>→</span> 03 · Shortlist</div></div>')
+            html('<div class="pn-hero-slim"><div class="t">Find the creators our gamers already watch.</div>'
+                 '<div class="p">01 · Brief <span>→</span> 02 · Creators <span>→</span> 03 · Shortlist</div></div>')
+            form = st.container(key="briefbar")
     else:
         hero, form = st.columns([1, 1.1], gap="large")
         with hero:
@@ -373,16 +372,26 @@ def campaign_page(campaigns: list[dict]) -> None:
                     st.error(f"Discovery failed: {e}")
                 return
             if ss.get("draft") is None:
-                html((ui.steps(0) if not slim else "") + f'<div class="pn-kicker">Campaign brief</div>')
-                with st.form("brief_form", border=False):
-                    st.text_area("Campaign brief", value="", height=110 if slim else 150,
-                                 placeholder="Describe your campaign…",
-                                 label_visibility="collapsed", key="campaign_brief_v2")
-                    if ss.pop("brief_error", False):
-                        st.warning("Describe your campaign before continuing.")
-                    ex, go_col = st.columns([2.2, 1], vertical_alignment="center")
-                    ex.markdown(f'<div class="pn-subtle">{esc(BRIEF_EXAMPLES)}</div>', unsafe_allow_html=True)
-                    with go_col:
+                if slim:  # search-bar style: one input + button in a row, examples as a quiet line below
+                    with st.form("brief_form", border=False):
+                        inp, go_col = st.columns([6, 1.25], vertical_alignment="center", gap="small")
+                        inp.text_area("Campaign brief", value="", height=68, label_visibility="collapsed",
+                                      placeholder="Describe your campaign — product, market, audience, budget…",
+                                      key="campaign_brief_v2")
+                        with go_col:
+                            st.form_submit_button("Continue →", type="primary", width="stretch",
+                                                  on_click=_submit_brief)
+                        if ss.pop("brief_error", False):
+                            st.warning("Describe your campaign before continuing.")
+                        html(f'<div class="pn-brief-ex">{esc(BRIEF_EXAMPLES)}</div>')
+                else:
+                    html(ui.steps(0) + '<div class="pn-kicker">Campaign brief</div>')
+                    with st.form("brief_form", border=False):
+                        st.text_area("Campaign brief", value="", height=150, placeholder="Describe your campaign…",
+                                     label_visibility="collapsed", key="campaign_brief_v2")
+                        if ss.pop("brief_error", False):
+                            st.warning("Describe your campaign before continuing.")
+                        html(f'<div class="pn-subtle" style="margin:-4px 0 12px">{esc(BRIEF_EXAMPLES)}</div>')
                         st.form_submit_button("Continue →", type="primary", width="stretch",
                                               on_click=_submit_brief)
             else:
@@ -521,9 +530,11 @@ def creator_card(vm: dict, ctx: dict, shortlisted: bool) -> None:
         ])
         reason = ui.reasons_list(vm["reasons"][:1]) if vm["reasons"] else ""
         html(f'<div class="pn-card-head">{ui.avatar(vm["name"], vm["avatar"])}<div class="who">'
-             f'<div class="pn-rank">#{vm["rank"]} · YouTube{" · " + esc(loc) if loc else ""}</div>'
+             f'<div class="pn-rank" title="YouTube">#{vm["rank"]} {ui.platform_icon("youtube", 13)}'
+             f'{esc(loc)}</div>'
              f'<div class="name" title="{esc(vm["name"])}">{esc(vm["name"])}</div>'
-             f'<div class="meta">{esc(vm["niche"])}</div></div>{ui.score_block(vm["score"])}</div>'
+             f'<div class="meta">{esc(vm["niche"])}</div></div>'
+             f'<div class="pn-scorewrap">{ui.tier_badge(vm["tier"])}{ui.score_block(vm["score"])}</div></div>'
              f'<div style="margin:10px 0 2px">{badges}</div><div class="pn-stats three">{stats}</div>{reason}')
         a, b = st.columns(2)
         a.button("View analysis", key=f"view_{vm['id']}", type="primary", on_click=go, args=("analysis", vm["id"]),
@@ -561,7 +572,7 @@ def top_picks(ctx: dict) -> None:
 def compare_table(items: list[dict], ctx: dict, short: list[str]) -> None:
     lang = ctx["lang"]
     df = pd.DataFrame([{
-        "#": v["rank"], "Creator": v["name"], "Score": v["score"], "Confidence": v["conf_label"],
+        "#": v["rank"], "Tier": v["tier"], "Creator": v["name"], "Score": v["score"], "Confidence": v["conf_label"],
         "Subscribers": v["subs"], "Median views": v["median_views"],
         "Engagement %": None if v["engagement"] is None else 100 * v["engagement"],
         "Relevant videos": v["n_relevant"], "Audience relevance": v["bars"]["Audience relevance"],
@@ -755,25 +766,27 @@ def analysis_page(ctx: dict, cid: str, short: list[str]) -> None:
         left, mid, right = st.columns([3.2, 1.2, 1.4], vertical_alignment="center")
         with left:
             loc = COUNTRY.get(vm["country"], vm["country"]) if vm["country"] else ""
-            links = "".join(ui.chip(f"{p}: @{h}") for p, h in vm["others"].items())
+            links = "".join(ui.platform_chip(p, h) for p, h in vm["others"].items())
             name = f'<a href="{esc(vm["url"])}" target="_blank" style="text-decoration:none">{esc(vm["name"])}</a>' \
                 if vm["url"] else esc(vm["name"])
             html(f'<div class="pn-card-head">{ui.avatar(vm["name"], vm["avatar"], large=True)}<div class="who">'
                  f'<div class="pn-rank">#{vm["rank"]} OF {len(ctx["vms"])}</div>'
                  f'<div style="font-size:1.9rem;font-weight:800;letter-spacing:-.03em">{name}</div>'
-                 f'<div class="meta">{" · ".join(esc(x) for x in ["YouTube", loc, vm["niche"]] if x)}</div>'
+                 f'<div class="meta">{ui.platform_icon("youtube")} '
+                 f'{" · ".join(esc(x) for x in ["YouTube", loc, vm["niche"]] if x)}</div>'
                  f'<div style="margin-top:8px">{ui.confidence_badge(vm["conf"], vm["conf_label"], basis=vm["basis"])}'
                  f'{" " + ui.gem_badge() if vm["gem"] else ""}'
                  f'{" " + ui.budget_badge() if vm["over_budget"] else ""}</div>'
                  f'<div style="margin-top:8px">{links}</div></div></div>')
         with mid:
-            html(ui.score_block(vm["score"], "Campaign score", xl=True))
+            html(f'<div class="pn-scorewrap" style="justify-content:flex-end">{ui.tier_badge(vm["tier"], large=True)}'
+                 f'{ui.score_block(vm["score"], "Campaign score", xl=True)}</div>')
         with right:
             html('<div class="pn-stats" style="grid-template-columns:1fr;margin:0">'
-                 + ui.stat_tile("Subscribers", ui.fmt_count(vm["subs"]))
+                 + ui.stat_tile("Subscribers", ui.fmt_count(vm["subs"]), ico="users")
                  + ui.stat_tile("Median views · engagement",
-                                f"{ui.fmt_count(vm['median_views'])} · {ui.pct1(vm['engagement'])}")
-                 + ui.stat_tile("Cost proxy (assumed CPM)", f"€{vm['cost']:,.0f}" if vm["cost"] else "–")
+                                f"{ui.fmt_count(vm['median_views'])} · {ui.pct1(vm['engagement'])}", ico="eye")
+                 + ui.stat_tile("Cost proxy (assumed CPM)", f"€{vm['cost']:,.0f}" if vm["cost"] else "–", ico="euro")
                  + "</div>")
             sl = cid in short
             st.button("✓ Shortlisted" if sl else "+ Add to shortlist", type="secondary" if sl else "primary",
@@ -925,13 +938,14 @@ def shortlist_page(ctx: dict, short: list[str]) -> None:
             a, b, c, d = st.columns([3.2, 1.2, 1.1, 1.1], vertical_alignment="center")
             if vm:
                 a.markdown(f'<div class="pn-card-head">{ui.avatar(name, vm["avatar"])}<div class="who">'
-                           f'<div class="name">{esc(name)}</div><div class="meta">YouTube · '
+                           f'<div class="name">{esc(name)}</div><div class="meta">{ui.platform_icon("youtube", 12)} YouTube · '
                            f'{esc(COUNTRY.get(vm["country"], vm["country"]) + " · " if vm["country"] else "")}'
                            f'{ui.fmt_count(vm["subs"])} '
                            f'subscribers</div><div style="margin-top:6px">'
                            f'{ui.confidence_badge(vm["conf"], vm["conf_label"], basis=vm["basis"])}</div></div></div>',
                            unsafe_allow_html=True)
-                b.markdown(ui.score_block(vm["score"]), unsafe_allow_html=True)
+                b.markdown(f'<div class="pn-scorewrap" style="justify-content:flex-end">{ui.tier_badge(vm["tier"])}'
+                           f'{ui.score_block(vm["score"])}</div>', unsafe_allow_html=True)
                 c.button("View", key=f"slv_{cid}", on_click=go, args=("analysis", cid), width="stretch")
                 rows.append({"creator": name, "rank": vm["rank"], "cost_proxy_eur": vm["cost"], "campaign_score": vm["score"], "data_confidence": round(vm["conf"], 2),
                              "subscribers": vm["subs"], "median_relevant_views": vm["median_views"],
