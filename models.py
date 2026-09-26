@@ -38,6 +38,7 @@ class CampaignSpec(CampaignSpecDraft):
     min_subscribers: int = 2_000
     max_subscribers: int = 3_000_000
     n_creators: int = 10            # creators analysed in depth (set by the user, drives API cost)
+    budget_per_video: int = 0       # max cost proxy per video in €, 0 = no limit (UI flag only, never changes the score)
     field_sources: dict[str, str] = Field(default_factory=dict)
 
 

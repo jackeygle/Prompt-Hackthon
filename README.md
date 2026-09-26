@@ -14,7 +14,7 @@ reported next to a separate **Data Confidence** score.
 pip install -r requirements.txt
 cp .env.example .env        # YOUTUBE_API_KEY + GROQ_API_KEY required; TAVILY/OPENAI/GEMINI optional
 streamlit run app.py        # Campaign → Continue → confirm details → Find creators → Discover → View analysis
-                            # → Shortlist. "Offline demo snapshot" under Recent campaigns works without network.
+                            # → Shortlist.
 # or headless:
 python pipeline.py "Find creators for €600–900 refurbished gaming PCs targeting gamers in Germany."
 python -m pytest -q
@@ -40,7 +40,7 @@ python check_setup.py      # one tiny request per API: shows exactly which keys/
 AI models only extract features and evidence. They never compare or rank creators.
 
 All YouTube and LLM responses are cached in SQLite (`api_cache`), so re-runs cost no quota.
-`data/demo.db` is a committed snapshot without the raw cache.
+`data/demo.db` is a committed snapshot without the raw cache; the UI tests run against a copy of it.
 
 ## Criteria (B = benefit, C = cost)
 
