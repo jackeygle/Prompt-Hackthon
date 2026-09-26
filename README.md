@@ -12,7 +12,7 @@ reported next to a separate **Data Confidence** score.
 
 ```bash
 pip install -r requirements.txt
-cp .env.example .env        # YOUTUBE_API_KEY + GROQ_API_KEY required; TAVILY/OPENAI/GEMINI/TWITCH optional
+cp .env.example .env        # YOUTUBE_API_KEY + GROQ_API_KEY required; TAVILY/OPENAI/GEMINI/TWITCH/INSTAGRAM optional
 streamlit run app.py        # Campaign → Continue → confirm details → Find creators → Discover → View analysis
                             # → Shortlist.
 # or headless:
@@ -34,6 +34,7 @@ python check_setup.py      # one tiny request per API: shows exactly which keys/
 | Cheap filter | `pipeline.run_campaign` | – | subscriber range from spec, country in market if declared; screens max(20, 2×creators) channels (≤100) by search hits + 2×web mentions |
 | Upload screening | `features.relevant_video_ids` | Groq | 1 call per channel over its last 30 titles; a video counts if its viewers plausibly belong to the target audience (product/niche **or** the audience's interests, e.g. PC gaming, game performance, tech) |
 | Deep analysis (N creators, user-selected) | `features.py` | YouTube + Groq | 5 relevant videos, transcript if available else title+description, 50 comments/video |
+| Instagram numbers | `instagram.py` | Instagram Graph API (Business Discovery) | ranked and web-only creators with a known Instagram handle: followers, median likes/comments of the last 12 posts, engagement rate, posts in the last 30 days. Professional accounts only; descriptive, never scored |
 | Visual features | `vision.py` | OpenAI | 1 call per creator, 4 official thumbnail URLs, `detail=low` |
 | Hard filter → AHP → TOPSIS | `ranking.py` | – | deterministic; criteria with < 50% coverage are dropped and shown |
 | UI | `app.py` + `ui.py` | – | Campaign / Discover / Shortlist; creator cards, analysis with evidence cards, live AHP re-weighting, staged loader driven by real pipeline progress |
@@ -69,6 +70,7 @@ Missing values are imputed with the unfavourable quartile and lower confidence; 
 | `TAVILY_API_KEY` / Tavily down | YouTube-only discovery; error listed in run statistics |
 | `GROQ_API_KEY` / Groq down or rate-limited | falls back along `LLM_MODELS` (Gemini) |
 | `TWITCH_CLIENT_ID/SECRET` / Twitch down | no Twitch discovery or metrics; listed in run statistics |
+| `INSTAGRAM_ACCESS_TOKEN` missing / expired | no Instagram numbers; token errors listed in run statistics (`check_setup.py` flags an expired token) |
 | `OPENAI_API_KEY` / OpenAI down | no visual features; visual criterion dropped/imputed; confidence −0.05 |
 | Transcript blocked / missing | title + description only; transcript coverage lowers confidence |
 | Single API error | retried / that enrichment skipped for that creator; the run continues |
@@ -79,7 +81,10 @@ Missing values are imputed with the unfavourable quartile and lower confidence; 
 - Transcripts use the unofficial `youtube-transcript-api`; works from most home connections, usually blocked
   from cloud/datacenter IPs.
 - No video downloading / frame extraction (YouTube ToS); VLM sees official thumbnails only.
-- TikTok / Instagram contribute discovery, handles and evidence only — no metrics, no scraping.
+- TikTok contributes discovery, handles and evidence only — no metrics, no scraping.
+- Instagram: Business Discovery only reads known handles of professional (creator/business) accounts — no
+  keyword search, no audience demographics. The user token expires after 60 days (extend it in Meta's Access
+  Token Tool).
 - Twitch: streamers are merged with their YouTube channel (YouTube link in the Twitch bio, or exact name match)
   and ranked on their YouTube data; the Twitch follower total is shown on the card but never changes the score.
   Streamers without a YouTube match are listed with real Twitch metrics, not ranked (no videos/comments to analyse).

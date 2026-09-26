@@ -35,6 +35,13 @@ class TwitchCollector:
     source_reliability = 1.0
 
 
+class InstagramCollector:
+    """Instagram Graph API Business Discovery (instagram.py): public numbers of known professional accounts."""
+    platform = "instagram"
+    capabilities = Capability.PROFILE_STATS | Capability.CONTENT
+    source_reliability = 1.0
+
+
 class LinkedAccountCollector:
     """Other-platform handles parsed from YouTube descriptions. Identity only, no metrics."""
     platform = "multi"

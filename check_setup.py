@@ -2,7 +2,7 @@
 
     python check_setup.py
 
-Cost: ~2 YouTube quota units, 1 Tavily credit, 3 free Twitch calls, 1 tiny Groq call, 1 tiny OpenAI vision call.
+Cost: ~2 YouTube quota units, 1 Tavily credit, 3 free Twitch calls, 2 Instagram Graph calls, 1 tiny Groq call, 1 tiny OpenAI vision call.
 """
 import os
 import sys
@@ -23,7 +23,8 @@ def report(name, status, msg):
 def check_env():
     for var, required in [("YOUTUBE_API_KEY", True), ("GROQ_API_KEY", True), ("TAVILY_API_KEY", False),
                           ("OPENAI_API_KEY", False), ("GEMINI_API_KEY", False),
-                          ("TWITCH_CLIENT_ID", False), ("TWITCH_CLIENT_SECRET", False)]:
+                          ("TWITCH_CLIENT_ID", False), ("TWITCH_CLIENT_SECRET", False),
+                          ("INSTAGRAM_ACCESS_TOKEN", False)]:
         if os.getenv(var):
             report(var, OK, "set")
         else:
@@ -118,6 +119,20 @@ def check_twitch():
         report("Twitch Helix", FAIL, str(e)[:160])
 
 
+def check_instagram():
+    import instagram
+    if not instagram.available():
+        return
+    try:
+        me = instagram.my_ig_id()
+        p = instagram.profile("instagram")  # a public business account, works for any valid token
+        report("Instagram Graph API", OK if p else WARN, f"your IG account id {me}; "
+               + (f"@instagram has {p['followers']:,} followers" if p else "Business Discovery returned nothing"))
+    except Exception as e:
+        hint = " → token expired: generate a new one and extend it (60 days)" if "190" in str(e) else ""
+        report("Instagram Graph API", FAIL, str(e)[:160] + hint)
+
+
 def check_transcripts():
     import youtube as yt
     yt.TranscriptStatus.reset()
@@ -139,6 +154,7 @@ if __name__ == "__main__":
     check_llm_calls()
     check_tavily()
     check_twitch()
+    check_instagram()
     check_transcripts()
     print("\nResult:", "ready for a full run" if FAIL not in results else "fix the ❌ items first")
     sys.exit(1 if FAIL in results else 0)

@@ -1,4 +1,4 @@
-"""End-to-end pipeline: brief -> spec -> YouTube + web + Twitch discovery -> identity merge -> cheap filter ->
+"""End-to-end pipeline: brief -> spec -> YouTube + web + Twitch discovery -> identity merge (+ Instagram numbers) -> cheap filter ->
 collection -> text / comment / visual features -> hard filter -> AHP + TOPSIS.
 
 CLI:  python pipeline.py "Find creators for €600–900 refurbished gaming PCs targeting gamers in Germany"
@@ -18,11 +18,12 @@ import config
 import db
 import features as fx
 import ranking
+import instagram
 import twitch
 import vision
 import web_discovery as web
 import youtube as yt
-from collectors import LinkedAccountCollector, TwitchCollector, YouTubeCollector, extract_social_links
+from collectors import InstagramCollector, LinkedAccountCollector, TwitchCollector, YouTubeCollector, extract_social_links
 from llm import LLMClient
 from llm import dead_models as llm_dead_models
 from llm import missing_keys as llm_missing_keys
@@ -105,6 +106,7 @@ def run_campaign(brief: str, spec: CampaignSpec | None = None, seed_handles: lis
     yt.TranscriptStatus.reset()
     web.TavilyUsage.calls = 0
     twitch.TwitchUsage.calls = 0
+    instagram.InstagramUsage.calls = 0
     errors: list[str] = []
     campaign_id = "c_" + uuid.uuid4().hex[:8]
 
@@ -330,6 +332,21 @@ def run_campaign(brief: str, spec: CampaignSpec | None = None, seed_handles: lis
         if tp and tp.get("followers") is not None:
             r["features"]["twitch_followers"] = tp["followers"]
 
+    # 5c. Instagram numbers for ranked and web-only creators with a known handle (descriptive; never scored)
+    ig_profiles: dict[str, dict] = {}
+    ig_handles = [r["links"]["instagram"][0] for r in results.values() if "instagram" in r["links"]]
+    ig_handles += [w["profiles"]["instagram"] for w in web_only if w["profiles"].get("instagram")]
+    if ig_handles and config.INSTAGRAM_ENABLED and instagram.available():
+        p(f"Instagram: loading {len(set(ig_handles))} profiles", 0.91)
+        ig_profiles, ierr = instagram.profiles(ig_handles)
+        errors += [f"Instagram: {e}" for e in ierr]
+    for r in results.values():
+        ip = ig_profiles.get(r["links"].get("instagram", ("",))[0].lower())
+        if ip and ip["followers"] is not None:
+            r["features"]["instagram_followers"] = ip["followers"]
+        if ip and ip["engagement_rate"] is not None:
+            r["features"]["instagram_engagement_rate"] = ip["engagement_rate"]
+
     # 6. Persist creators, accounts, discoveries, features, evidence, visual tags
     p("Ranking", 0.92)
     for cid, r in results.items():
@@ -346,8 +363,11 @@ def run_campaign(brief: str, spec: CampaignSpec | None = None, seed_handles: lis
                                 "description": sn.get("description", "")[:500]}), db.now()))
         for plat, (handle, source) in r["links"].items():
             tp = twitch_profiles.get(handle.lower()) if plat == "twitch" else None
+            ip = ig_profiles.get(handle.lower()) if plat == "instagram" else None
             if tp:
                 _save_twitch_account(tp, creator_id)
+            elif ip:
+                _save_instagram_account(ip, creator_id)
             else:
                 db.execute("INSERT OR IGNORE INTO platform_accounts VALUES (?,?,?,?,?,?,?,?,?,?)",
                            (f"{plat}:{handle.lower()}", creator_id, plat, handle, None, None, source,
@@ -374,6 +394,8 @@ def run_campaign(brief: str, spec: CampaignSpec | None = None, seed_handles: lis
     # Web-only creators: discovery evidence and profiles only (no metrics -> not ranked)
     for w in web_only:
         key = "web:" + web._norm(w["name"])
+        if ip := ig_profiles.get((w["profiles"].get("instagram") or "").lower()):
+            _save_instagram_account(ip, None)
         db.executemany("INSERT INTO discoveries (campaign_id, creator_key, source, platform, handle, query, url,"
                        " evidence, method) VALUES (?,?,?,?,?,?,?,?,?)",
                        [(campaign_id, key, "tavily_web", s_["platform"], w["profiles"].get(s_["platform"]) or w["name"],
@@ -396,6 +418,7 @@ def run_campaign(brief: str, spec: CampaignSpec | None = None, seed_handles: lis
         "tavily_calls": web.TavilyUsage.calls,
         "twitch_calls": twitch.TwitchUsage.calls, "twitch_profiles": len(twitch_profiles),
         "twitch_matched_channels": len(twitch_matched), "twitch_only_creators": len(twitch_only),
+        "instagram_calls": instagram.InstagramUsage.calls, "instagram_profiles": len(ig_profiles),
         "text_llm_attempts": dict(llm.calls_by_model), "text_llm_cache_hits": llm.cache_hits,
         "vlm_attempts": dict(vlm.calls_by_model), "vlm_cache_hits": vlm.cache_hits,
         "transcripts": dict(yt.TranscriptStatus.counts), "transcripts_blocked": yt.TranscriptStatus.blocked,
@@ -404,7 +427,8 @@ def run_campaign(brief: str, spec: CampaignSpec | None = None, seed_handles: lis
         "disabled_models": llm_dead_models(),
         "missing_env": sorted(set(llm_missing_keys(config.LLM_MODELS) + llm_missing_keys(config.VLM_MODELS)
                                   + ([] if config.TAVILY_API_KEY else ["TAVILY_API_KEY"])
-                                  + ([] if twitch.available() else ["TWITCH_CLIENT_ID", "TWITCH_CLIENT_SECRET"]))),
+                                  + ([] if twitch.available() else ["TWITCH_CLIENT_ID", "TWITCH_CLIENT_SECRET"])
+                                  + ([] if instagram.available() else ["INSTAGRAM_ACCESS_TOKEN"]))),
         "errors": errors[:20],
     }
     db.execute("INSERT OR REPLACE INTO run_stats VALUES (?,?)", (campaign_id, json.dumps(stats)))
@@ -426,9 +450,24 @@ def _save_twitch_account(tp: dict, creator_id: str | None) -> None:
                                                    "n_vods", "median_vod_views", "last_stream_at")}), db.now()))
 
 
+def _save_instagram_account(ip: dict, creator_id: str | None) -> None:
+    if creator_id is None:
+        prev = db.query("SELECT creator_id FROM platform_accounts WHERE platform='instagram' AND lower(handle)=?",
+                        (ip["username"].lower(),))
+        creator_id = prev[0]["creator_id"] if prev else None
+    db.execute("INSERT OR REPLACE INTO platform_accounts VALUES (?,?,?,?,?,?,?,?,?,?)",
+               ("instagram:" + ip["username"].lower(), creator_id, "instagram", ip["username"], ip["url"],
+                ip.get("followers"), "instagram_graph_api", InstagramCollector.source_reliability,
+                json.dumps({k: ip.get(k) for k in ("name", "avatar", "biography", "media_count", "n_posts",
+                                                   "median_likes", "median_comments", "engagement_rate",
+                                                   "posts_last_30d", "last_post_at")}), db.now()))
+
+
 def _method(name: str) -> str:
     if name.startswith("twitch_"):
         return "twitch_api"
+    if name.startswith("instagram_"):
+        return "instagram_api"
     if name in fx.CONTENT_FEATURES:
         return "llm"
     if name.startswith("visual_") or name == "n_visual_images":

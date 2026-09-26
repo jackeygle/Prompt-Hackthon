@@ -17,6 +17,8 @@ AZURE_OPENAI_DEPLOYMENT = os.getenv("AZURE_OPENAI_DEPLOYMENT", "")
 TAVILY_API_KEY = os.getenv("TAVILY_API_KEY", "")
 TWITCH_CLIENT_ID = os.getenv("TWITCH_CLIENT_ID", "")
 TWITCH_CLIENT_SECRET = os.getenv("TWITCH_CLIENT_SECRET", "")
+INSTAGRAM_ACCESS_TOKEN = os.getenv("INSTAGRAM_ACCESS_TOKEN", "")
+INSTAGRAM_USER_ID = os.getenv("INSTAGRAM_USER_ID", "")  # optional: found via /me/accounts otherwise
 
 DB_PATH = Path(os.getenv("DB_PATH", ROOT / "data" / "creator_intel.db"))
 
@@ -77,3 +79,9 @@ MIN_CRITERION_COVERAGE = 0.5  # criteria known for fewer candidates than this ar
 TWITCH_ENABLED = os.getenv("TWITCH_ENABLED", "1") == "1"
 TWITCH_TOP_GAMES = 20       # top categories added to the audience-interest categories
 TWITCH_MAX_PROFILES = 30    # channels enriched (users + followers + VODs: ~3 calls each)
+
+# Instagram Graph API Business Discovery: enrichment of known handles (no search), professional accounts only
+INSTAGRAM_ENABLED = os.getenv("INSTAGRAM_ENABLED", "1") == "1"
+INSTAGRAM_GRAPH_VERSION = os.getenv("INSTAGRAM_GRAPH_VERSION", "v26.0")
+INSTAGRAM_MEDIA = 12          # latest posts per profile for engagement / posting frequency
+INSTAGRAM_MAX_PROFILES = 40   # ~200 calls/hour limit per token

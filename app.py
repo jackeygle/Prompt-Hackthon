@@ -565,9 +565,9 @@ def creator_card(vm: dict, ctx: dict, shortlisted: bool) -> None:
                          hint=f"Per video: median views × assumed €{config.ASSUMED_CPM_EUR:.0f} CPM, not a quote"),
         ])
         reason = ui.reasons_list(vm["reasons"][:1]) if vm["reasons"] else ""
-        tw = vm["other_followers"].get("twitch")
-        if tw is not None:  # also streams on Twitch: real follower total from the Twitch API
-            badges += " " + ui.platform_chip("twitch", vm["others"]["twitch"], tw)
+        for plat in ("twitch", "instagram"):  # real follower totals from the official APIs, never scored
+            if (n := vm["other_followers"].get(plat)) is not None:
+                badges += " " + ui.platform_chip(plat, vm["others"][plat], n)
         html(f'<div class="pn-card-head">{ui.avatar(vm["name"], vm["avatar"])}<div class="who">'
              f'<div class="pn-rank" title="YouTube">#{vm["rank"]} {ui.platform_icon("youtube", 13)}'
              f'{esc(loc)}</div>'
@@ -766,6 +766,11 @@ def method_section(ctx: dict) -> None:
         g = wo.groupby("creator_key").agg(
             Creator=("handle", "first"), Platforms=("platform", lambda x: ", ".join(sorted(set(x)))),
             Mentions=("url", "count"), Evidence=("evidence", "first"), Source=("url", "first"))
+        ig = {r["handle"].lower(): r["followers"] for r in db.query(
+            "SELECT handle, followers FROM platform_accounts WHERE platform='instagram' AND followers IS NOT NULL")}
+        if ig:
+            ig_handle = wo[wo.platform == "instagram"].groupby("creator_key")["handle"].first()
+            g["Instagram followers"] = [ig.get(str(ig_handle.get(k, "")).lower()) for k in g.index]
         with st.expander(f"Found on web & social, no YouTube match ({len(g)}) — not ranked"):
             st.caption("No YouTube metrics available — review manually.")
             st.dataframe(g.sort_values("Mentions", ascending=False), hide_index=True, width="stretch",
