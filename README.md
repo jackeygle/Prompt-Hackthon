@@ -18,6 +18,7 @@ streamlit run app.py        # "Demo snapshot" source, or sidebar → New campaig
 # or headless:
 python pipeline.py "Find creators for €600–900 refurbished gaming PCs targeting gamers in Germany."
 python -m pytest -q
+python check_setup.py      # one tiny request per API: shows exactly which keys/hosts/models work
 ```
 
 ## Pipeline
