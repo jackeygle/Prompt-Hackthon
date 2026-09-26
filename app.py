@@ -112,10 +112,13 @@ def shortlist_ids(campaign_id: str) -> list[str]:
 
 
 def toggle_shortlist(campaign_id: str, cid: str) -> None:
+    name = (db.query("SELECT name FROM creators WHERE id=?", (cid,)) or [{"name": "Creator"}])[0]["name"]
     if cid in shortlist_ids(campaign_id):
         db.execute("DELETE FROM shortlist WHERE campaign_id=? AND creator_id=?", (campaign_id, cid))
+        ss.toast = (f"Removed {name} from the shortlist", ":material/bookmark_remove:")
     else:
         db.execute("INSERT OR IGNORE INTO shortlist VALUES (?,?,?)", (campaign_id, cid, db.now()))
+        ss.toast = (f"Added {name} to the shortlist", ":material/bookmark_added:")
 
 
 def go(view: str, creator: str | None = None) -> None:
@@ -230,6 +233,13 @@ def build_context(campaign: dict) -> dict:
         v["gem"] = bool(med_subs and v["subs"] and fit is not None and fit >= 75 and v["subs"] < med_subs
                         and v["score"] >= med_score)
         v["tier"] = ui.tier_of(v["rank"], len(vms))
+    vids = sorted({vid for v in vms.values() for vid in v.get("videos") or []})
+    if vids:
+        rows = db.query(f"SELECT id, views, published_at FROM content WHERE id IN ({','.join('?' * len(vids))})", vids)
+        by_id = {r["id"]: r for r in rows}
+        for v in vms.values():
+            vs = sorted((by_id[i] for i in v.get("videos") or [] if i in by_id), key=lambda r: r["published_at"] or "")
+            v["video_views"] = [r["views"] for r in vs]
     return {"campaign": campaign, "spec": spec, "feats": feats, "res": res, "weights": weights, "used": used,
             "group_w": gw, "passed": passed, "vms": vms, "creators": creators, "discoveries": discoveries,
             "run_stats": run_stats, "lang": lang, "budget": budget}
@@ -245,7 +255,7 @@ def top_nav(n_short: int, campaign: dict | None) -> None:
         html(ui.brand_header())
     if inside:
         with right, st.container(horizontal=True, horizontal_alignment="right",
-                                 key="cart-on" if ss.view == "shortlist" else "cart"):
+                                 key=(f"cart-on-{n_short}" if ss.view == "shortlist" else f"cart-{n_short}")):
             st.button(f"Shortlist ({n_short})" if n_short else "Shortlist", icon=":material/bookmark:",
                       key="btn_cart", on_click=go, args=("shortlist",))
         with st.container(key="back"):
@@ -550,8 +560,9 @@ def creator_card(vm: dict, ctx: dict, shortlisted: bool) -> None:
              f'{esc(loc)}</div>'
              f'<div class="name" title="{esc(vm["name"])}">{esc(vm["name"])}</div>'
              f'<div class="meta">{esc(vm["niche"])}</div></div>'
-             f'<div class="pn-scorewrap">{ui.tier_badge(vm["tier"])}{ui.score_block(vm["score"])}</div></div>'
-             f'<div style="margin:10px 0 2px">{badges}</div><div class="pn-stats three">{stats}</div>{reason}')
+             f'<div class="pn-scorewrap">{ui.tier_badge(vm["tier"])}{ui.score_ring(vm["score"], "Score")}</div></div>'
+             f'<div style="margin:10px 0 2px">{badges}</div><div class="pn-stats three">{stats}</div>'
+             f'{ui.views_sparkline(vm.get("video_views") or [])}{reason}')
         a, b = st.columns(2)
         a.button("View analysis", key=f"view_{vm['id']}", type="primary", on_click=go, args=("analysis", vm["id"]),
                  width="stretch")
@@ -999,6 +1010,8 @@ if ss.get("campaign") not in ids:
     ss.campaign = ids[0] if ids else None
 current = next((c for c in campaigns if c["id"] == ss.campaign), None)
 short = shortlist_ids(current["id"]) if current else []
+if msg := ss.pop("toast", None):
+    st.toast(msg[0], icon=msg[1])
 band = st.container(key="band")  # deep-green top band: nav + the page's title; pages add their heading to it
 with band:
     top_nav(len(short), current)

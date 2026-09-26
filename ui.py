@@ -464,6 +464,79 @@ div[class*="st-key-homecard"] div[class*="st-key-row-camp-"] {{ border-radius:12
  .pn-row-main .br {{ max-width:340px; }}
 }}
 @media (max-width:980px) {{ .pn-row-main .br, .pn-row-spec {{ display:none; }} }}
+/* ===== step 3: rings, sparklines, entrance and feedback motion (first render only; off with reduced motion) ===== */
+@property --pp {{ syntax:'<number>'; inherits:false; initial-value:0; }}
+.pn-ring {{ --pp:var(--p); width:74px; height:74px; border-radius:50%; flex:none; display:grid; place-items:center;
+  background:conic-gradient(var(--pn-lime) calc(var(--pp) * 1%), rgba(157,246,154,.16) 0);
+  animation:pnring 1s cubic-bezier(.2,.8,.2,1) both; }}
+@keyframes pnring {{ from {{ --pp:0; }} }}
+.pn-ring-in {{ width:60px; height:60px; border-radius:50%; background:var(--pn-navy); display:flex; flex-direction:column;
+  align-items:center; justify-content:center; line-height:1; }}
+.pn-ring .num {{ font-family:var(--pn-mono); font-weight:700; font-size:1.45rem; color:#fff; letter-spacing:-.04em; }}
+.pn-ring .lbl {{ font-size:.44rem; font-weight:700; letter-spacing:.12em; color:var(--pn-lime); text-transform:uppercase;
+  margin-top:3px; }}
+.pn-spark {{ margin:2px 0 8px; }}
+.pn-spark .k {{ font-size:.64rem; font-weight:700; letter-spacing:.07em; text-transform:uppercase; color:{T['text_muted']};
+  margin-bottom:4px; }}
+.pn-spark svg {{ width:100%; height:26px; display:block; }}
+.pn-spark rect {{ fill:#A8C5B9; transform-origin:bottom; transform-box:fill-box; animation:pnbar .6s ease-out both; }}
+.pn-spark rect.pk {{ fill:var(--pn-green); }}
+.pn-spark rect:nth-child(2) {{ animation-delay:.05s; }} .pn-spark rect:nth-child(3) {{ animation-delay:.1s; }}
+.pn-spark rect:nth-child(4) {{ animation-delay:.15s; }} .pn-spark rect:nth-child(5) {{ animation-delay:.2s; }}
+@keyframes pnbar {{ from {{ transform:scaleY(0); }} }}
+/* cards rise in, column by column */
+div[class*="st-key-card-cr-"] {{ animation:pnrise .38s ease-out both; }}
+[data-testid="stColumn"]:nth-child(2) div[class*="st-key-card-cr-"] {{ animation-delay:.07s; }}
+[data-testid="stColumn"]:nth-child(3) div[class*="st-key-card-cr-"] {{ animation-delay:.14s; }}
+@keyframes pnrise {{ from {{ opacity:0; transform:translateY(10px); }} }}
+/* score bars grow from zero */
+.pn-bar .fill {{ transform-origin:left; animation:pngrow .7s cubic-bezier(.2,.8,.2,1) both; }}
+@keyframes pngrow {{ from {{ transform:scaleX(0); }} }}
+/* S tier: one light sweep, once */
+.pn-tier.t-s {{ position:relative; overflow:hidden; }}
+.pn-tier.t-s::after {{ content:""; position:absolute; inset:0; transform:translateX(-130%);
+  background:linear-gradient(110deg, transparent 25%, rgba(255,255,255,.85) 50%, transparent 75%);
+  animation:pnsheen 1.1s .45s ease-out 1 both; }}
+@keyframes pnsheen {{ to {{ transform:translateX(130%); }} }}
+/* shortlist count bumps when it changes (its container is re-keyed by count) */
+div[class*="st-key-cart"] button {{ animation:pnbump .45s ease-out; }}
+@keyframes pnbump {{ 30% {{ transform:scale(1.08); }} }}
+/* tactile buttons */
+.stButton button:active, .stFormSubmitButton button:active, .stDownloadButton button:active {{
+  transform:translateY(1px); }}
+.stButton > button[kind^="primary"]:hover, .stFormSubmitButton > button[kind^="primary"]:hover {{ filter:brightness(1.04); }}
+/* home search bar: lift on focus, CTA idles until there is text, rotating example hint while empty */
+div[class*="st-key-briefbar"] [data-testid="stForm"] [data-testid="stHorizontalBlock"] {{
+  transition:transform .2s ease, box-shadow .2s ease; }}
+div[class*="st-key-briefbar"] [data-testid="stForm"] [data-testid="stHorizontalBlock"]:focus-within {{
+  transform:translateY(-2px); }}
+div[class*="st-key-briefbar"]:has(textarea:placeholder-shown) .stFormSubmitButton button {{ opacity:.55;
+  filter:saturate(.6); }}
+div[class*="st-key-briefbar"]:has(textarea:not(:placeholder-shown)) .stFormSubmitButton button {{
+  animation:pnready .5s ease-out 1; }}
+@keyframes pnready {{ 40% {{ transform:scale(1.05); }} }}
+div[class*="st-key-briefbar"] .stTextArea textarea::placeholder {{ color:transparent !important;
+  -webkit-text-fill-color:transparent !important; }}
+div[class*="st-key-briefbar"] [data-testid="stColumn"]:first-child {{ position:relative; }}
+div[class*="st-key-briefbar"]:has(textarea:placeholder-shown) [data-testid="stColumn"]:first-child::after {{
+  content:"Describe your campaign…"; position:absolute; left:15px; top:50%; transform:translateY(-50%);
+  pointer-events:none; color:#8B8E93; font-size:1.02rem; white-space:nowrap; overflow:hidden; max-width:calc(100% - 24px);
+  text-overflow:ellipsis; animation:pnhint 16s linear infinite; }}
+@keyframes pnhint {{
+  0%, 22% {{ content:"Describe your campaign…"; opacity:1; }}
+  24% {{ opacity:0; }}
+  25%, 47% {{ content:"e.g. Gaming PCs under €800 in Sweden"; opacity:1; }}
+  49% {{ opacity:0; }}
+  50%, 72% {{ content:"e.g. RTX 4070 PCs for streamers in Finland"; opacity:1; }}
+  74% {{ opacity:0; }}
+  75%, 97% {{ content:"e.g. Refurbished PCs for budget gamers in Germany"; opacity:1; }}
+  99% {{ opacity:0; }}
+}}
+/* card head: ring replaces the lime block */
+div[class*="st-key-card-cr-"] .pn-scorewrap {{ align-items:center; }}
+@media (prefers-reduced-motion:reduce) {{ .pn-ring, .pn-spark rect, .pn-bar .fill, div[class*="st-key-card-cr-"],
+  .pn-tier.t-s::after, div[class*="st-key-cart"] button {{ animation:none !important; }}
+  div[class*="st-key-briefbar"] [data-testid="stColumn"]:first-child::after {{ animation:none !important; }} }}
 </style>""", unsafe_allow_html=True)
 
 
@@ -665,3 +738,31 @@ def boot_log(stages: list[str], current: int, detail: str = "") -> str:
     done = current >= len(stages)
     head = "PRENEW CREATOR INTELLIGENCE · " + ("DISCOVERY COMPLETE" if done else "RUNNING DISCOVERY")
     return f'<div class="pn-boot"><div class="hd">{head}</div>{"".join(lines)}</div>'
+
+
+# ------------------------------------------------------------------ step 3: meaningful visuals + restrained motion
+def score_ring(score: int, label: str = "Campaign score") -> str:
+    """Campaign score as a benchmark-style ring (fills once on first render). Keeps the .num markup."""
+    s = max(0, min(100, int(score)))
+    return (f'<div class="pn-ring" style="--p:{s}" title="Campaign score: ranking against the other creators in this '
+            f'campaign (AHP-weighted TOPSIS)"><div class="pn-ring-in"><div class="num">{s}</div>'
+            f'<div class="lbl">{esc(label)}</div></div></div>')
+
+
+def views_sparkline(views: list[int | None], label: str = "Views · last relevant videos") -> str:
+    """Tiny bar chart of real per-video views (oldest → newest): consistent, spiky or declining at a glance."""
+    vals = [v for v in views if v is not None]
+    if len(vals) < 2:
+        return ""
+    top = max(vals) or 1
+    n = len(vals)
+    w, h, gap = 100.0 / n, 26, 2.2
+    bars = []
+    for i, v in enumerate(vals):
+        bh = max(2.0, h * v / top)
+        cls = "pk" if v == top else ""
+        bars.append(f'<rect class="{cls}" x="{i * w + gap / 2:.2f}" y="{h - bh:.2f}" width="{w - gap:.2f}" '
+                    f'height="{bh:.2f}" rx="1.5"><title>{fmt_count(v)} views</title></rect>')
+    return (f'<div class="pn-spark"><div class="k">{esc(label)}</div>'
+            f'<svg viewBox="0 0 100 {h}" preserveAspectRatio="none" role="img" aria-label="{esc(label)}">'
+            f'{"".join(bars)}</svg></div>')
