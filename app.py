@@ -28,6 +28,10 @@ ui.inject_css()
 DEFAULT_BRIEF = "Find creators for €600–900 refurbished gaming PCs targeting gamers in Germany."  # demo example only
 BRIEF_EXAMPLES = ("e.g. “Gaming PCs under €800 for Fortnite and CS2 players in Sweden” or "
                   "“RTX 4070 PCs for streamers in Finland, creators with 20k–500k subscribers”")
+# one-click example briefs on the home search bar: (chip label, brief)
+BRIEF_CHIPS = [("Gaming PCs < €800 · Sweden", "Gaming PCs under €800 for Fortnite and CS2 players in Sweden"),
+               ("RTX 4070 PCs · Finland", "RTX 4070 PCs for streamers in Finland, creators with 20k–500k subscribers"),
+               ("Refurbished PCs · Germany", "Refurbished gaming PCs at €600–900 for budget-conscious gamers in Germany")]
 COUNTRY = {"DE": "Germany", "AT": "Austria", "CH": "Switzerland", "FR": "France", "NL": "Netherlands",
            "SE": "Sweden", "FI": "Finland", "DK": "Denmark", "NO": "Norway", "US": "United States",
            "GB": "United Kingdom", "UK": "United Kingdom", "ES": "Spain", "IT": "Italy", "PL": "Poland"}
@@ -301,6 +305,10 @@ def _submit_brief() -> None:
         ss.brief_error = True
 
 
+def _use_example(brief: str) -> None:
+    ss["campaign_brief_v2"] = brief  # fills the search bar; the user still reviews and clicks Continue
+
+
 def _discard_draft() -> None:
     ss.pop("draft", None)
 
@@ -341,7 +349,7 @@ def campaign_page(campaigns: list[dict]) -> None:
     slim = bool(campaigns) and not running and not parse and ss.get("draft") is None
     if slim:
         with band:
-            html('<div class="pn-hero-slim"><div class="t">Find the creators our gamers already watch.</div>'
+            html('<div class="pn-hero-slim pn-center"><div class="t">Find the creators our gamers already watch.</div>'
                  '<div class="p">01 · Brief <span>→</span> 02 · Creators <span>→</span> 03 · Shortlist</div></div>')
             form = st.container(key="briefbar")
     else:
@@ -375,7 +383,7 @@ def campaign_page(campaigns: list[dict]) -> None:
                 if slim:  # search-bar style: one input + button in a row, examples as a quiet line below
                     with st.form("brief_form", border=False):
                         inp, go_col = st.columns([6, 1.25], vertical_alignment="center", gap="small")
-                        inp.text_area("Campaign brief", value="", height=68, label_visibility="collapsed",
+                        inp.text_area("Campaign brief", height=68, label_visibility="collapsed",
                                       placeholder="Describe your campaign — product, market, audience, budget…",
                                       key="campaign_brief_v2")
                         with go_col:
@@ -383,7 +391,12 @@ def campaign_page(campaigns: list[dict]) -> None:
                                                   on_click=_submit_brief)
                         if ss.pop("brief_error", False):
                             st.warning("Describe your campaign before continuing.")
-                        html(f'<div class="pn-brief-ex">{esc(BRIEF_EXAMPLES)}</div>')
+                    with st.container(key="briefchips", horizontal=True, horizontal_alignment="center",
+                                      gap="small"):
+                        html('<span class="pn-brief-ex">Try:</span>')
+                        for i, (label, brief) in enumerate(BRIEF_CHIPS):
+                            st.button(label, key=f"ex_{i}", on_click=_use_example, args=(brief,),
+                                      help=brief)
                 else:
                     html(ui.steps(0) + '<div class="pn-kicker">Campaign brief</div>')
                     with st.form("brief_form", border=False):
@@ -474,9 +487,11 @@ def recent_campaigns(campaigns: list[dict], n_cols: int = 3) -> None:
                                 (c["id"],))[0]["n"] for c in campaigns}
     empty = [c for c in campaigns if not counts[c["id"]]]
     shown = campaigns if ss.get("show_empty_reports") else [c for c in campaigns if counts[c["id"]]]
-    html(f'<div class="pn-list-head"><span class="t">Recent campaigns</span>'
-         f'<span class="n">{len(shown)} report{"s" if len(shown) != 1 else ""}</span></div>')
-    with st.container(key="reportlist"):
+    home = st.container(key="homecard")
+    home.markdown(f'<div class="pn-list-head"><span class="t">Recent campaigns</span>'
+                  f'<span class="n">{len(shown)} report{"s" if len(shown) != 1 else ""}</span></div>',
+                  unsafe_allow_html=True)
+    with home, st.container(key="reportlist"):
         for c in shown:
             spec = CampaignSpec.model_validate_json(c["spec_json"])
             n = counts[c["id"]]
@@ -497,7 +512,8 @@ def recent_campaigns(campaigns: list[dict], n_cols: int = 3) -> None:
                              help="Delete report"):
                     confirm_delete(c["id"], spec.product)
     if empty:
-        st.toggle(f"Show reports without results ({len(empty)})", key="show_empty_reports")
+        with home:
+            st.toggle(f"Show reports without results ({len(empty)})", key="show_empty_reports")
 
 
 @st.dialog("Delete this report?")

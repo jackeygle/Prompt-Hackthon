@@ -337,6 +337,7 @@ div[class*="st-key-row-camp-"] {{ padding:12px 10px 12px 20px; border-bottom:1px
   transition:background .12s ease; border-left:3px solid transparent; }}
 div[class*="st-key-row-camp-"]:last-child {{ border-bottom:none; }}
 div[class*="st-key-row-camp-"]:hover {{ background:#F4FEF4; border-left-color:var(--pn-lime); }}
+div[class*="st-key-row-camp-"] {{ flex-wrap:nowrap !important; }}
 div[class*="st-key-row-camp-"] > div {{ flex:0 0 auto !important; width:auto !important; }}
 div[class*="st-key-row-camp-"] > div:first-child {{ flex:1 1 auto !important; min-width:0; }}
 .pn-row-main .nm {{ font-weight:700; color:var(--pn-navy); font-size:1rem; }}
@@ -403,6 +404,51 @@ div[class*="st-key-panel-head"] .pn-tier.t-c, div[class*="st-key-card-sl-"] .pn-
 .pn-boot .d {{ color:#9DA0B8; overflow:hidden; text-overflow:ellipsis; }}
 .pn-boot .cur {{ color:var(--pn-lime); animation:pnblink 1s steps(1) infinite; }}
 @keyframes pnblink {{ 50% {{ opacity:0; }} }}
+/* ===== home: centered search hero, bar with the CTA inside, report card overlapping the band ===== */
+div[class*="st-key-band"] .pn-hero-slim.pn-center {{ text-align:center; padding:34px 0 14px; }}
+div[class*="st-key-band"] .pn-hero-slim.pn-center .t {{ margin:0 auto 10px; max-width:900px; }}
+div[class*="st-key-briefbar"] {{ max-width:760px; margin:0 auto; width:100%; }}
+div[class*="st-key-briefbar"] div[class*="st-key-panel-campaign"] {{ max-width:none; margin:4px 0 0; }}
+div[class*="st-key-briefbar"] [data-testid="stForm"] [data-testid="stHorizontalBlock"] {{ background:#fff;
+  border-radius:18px; padding:6px; gap:6px; box-shadow:0 14px 34px rgba(8,32,20,.30); align-items:center; }}
+div[class*="st-key-briefbar"] .stTextArea textarea {{ box-shadow:none !important; resize:none !important;
+  padding:12px 14px !important; min-height:56px !important; font-size:1.02rem; line-height:1.45; }}
+div[class*="st-key-briefbar"] .stTextArea [data-baseweb="textarea"], div[class*="st-key-briefbar"] .stTextArea
+  [data-baseweb="base-input"] {{ border:none !important; background:transparent !important; box-shadow:none !important; }}
+div[class*="st-key-briefbar"] .stTextArea textarea:focus {{ outline:none; }}
+div[class*="st-key-briefbar"] .stTextArea textarea {{ color:var(--pn-navy) !important;
+  -webkit-text-fill-color:var(--pn-navy); caret-color:var(--pn-green); }}
+div[class*="st-key-briefbar"] .stTextArea textarea::placeholder {{ color:#8B8E93; -webkit-text-fill-color:#8B8E93; }}
+div[class*="st-key-briefbar"] .stTextArea div {{ border-color:transparent !important; background-color:transparent !important;
+  box-shadow:none !important; }}
+div[class*="st-key-briefbar"] [data-testid="stForm"] [data-testid="stHorizontalBlock"]:focus-within {{
+  box-shadow:0 0 0 3px var(--pn-lime), 0 14px 34px rgba(8,32,20,.30); }}
+div[class*="st-key-briefbar"] .stFormSubmitButton > button {{ min-height:56px; border-radius:14px; box-shadow:none; }}
+div[class*="st-key-briefchips"] {{ margin:10px 0 78px; align-items:center; }}
+div[class*="st-key-briefchips"] .pn-brief-ex {{ margin:0 2px 0 0; }}
+div[class*="st-key-briefchips"] .stButton button {{ min-height:30px !important; padding:3px 12px !important;
+  border-radius:999px !important; background:rgba(255,255,255,.10) !important; border:1px solid rgba(255,255,255,.32)
+  !important; color:#fff !important; box-shadow:none !important; }}
+div[class*="st-key-briefchips"] .stButton button p {{ font-size:.82rem; font-weight:600; color:inherit; }}
+div[class*="st-key-briefchips"] .stButton button:hover {{ background:rgba(157,246,154,.18) !important;
+  border-color:var(--pn-lime) !important; color:var(--pn-lime) !important; }}
+/* mesh fades in from both sides on the centered home */
+div[class*="st-key-band"]:has(div[class*="st-key-briefbar"])::before {{
+  -webkit-mask-image:linear-gradient(90deg, #000 0%, transparent 32%, transparent 68%, #000 100%);
+  mask-image:linear-gradient(90deg, #000 0%, transparent 32%, transparent 68%, #000 100%); }}
+/* report card lifts over the band's bottom edge */
+div[class*="st-key-homecard"] {{ position:relative; z-index:2; margin-top:-88px; background:#fff; border-radius:22px;
+  padding:20px 22px 14px; box-shadow:0 16px 40px rgba(29,29,53,.10); border:1px solid {T['border']}; }}
+div[class*="st-key-homecard"] div[class*="st-key-reportlist"] {{ border:none; border-radius:0; padding:0; }}
+div[class*="st-key-homecard"] div[class*="st-key-row-camp-"] {{ border-radius:12px; }}
+/* home only: brand mint washes down from the band into the page */
+[data-testid="stMain"]:has(div[class*="st-key-homecard"]) {{
+  background:linear-gradient(180deg, #EBFDEB 0px, #F2FBF4 420px, {T['bg']} 900px); }}
+@media (max-width:1240px) {{
+ .pn-row-spec {{ width:170px; }} .pn-row-num {{ width:92px; }} .pn-row-time {{ width:104px; }}
+ .pn-row-main .br {{ max-width:340px; }}
+}}
+@media (max-width:980px) {{ .pn-row-main .br, .pn-row-spec {{ display:none; }} }}
 </style>""", unsafe_allow_html=True)
 
 
