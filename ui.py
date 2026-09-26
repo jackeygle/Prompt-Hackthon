@@ -1,7 +1,7 @@
 """Prenew Creator Intelligence: design tokens, global CSS and reusable render helpers.
 
-Design direction: Prenew-inspired clean Nordic commerce × AI intelligence. Category-agnostic: nothing here
-depends on the product being marketed (gaming, fashion, beauty, food, …); only campaign content changes.
+Design direction: Prenew-inspired clean Nordic commerce × AI intelligence. The business context is gaming and
+technology audiences, but the visual language is deliberately not "gaming themed" (no RGB/neon/esports styling).
 
 All visual values live in TOKENS. They are a PROVISIONAL Prenew-inspired palette (prenew.com could not be
 inspected from the build environment): replace the hex values here with the brand's real ones and the
@@ -71,9 +71,9 @@ hr {{ border-color: {T['border']}; }}
   background: {T['surface']}; color: {T['text']}; box-shadow: none; transition: all .15s ease; }}
 .stButton > button:hover, .stDownloadButton > button:hover, .stFormSubmitButton > button:hover {{
   border-color: {T['text']}; color: {T['text']}; background: {T['surface']}; }}
-.stButton > button[kind="primary"], .stFormSubmitButton > button[kind="primary"] {{
+.stButton > button[kind^="primary"], .stFormSubmitButton > button[kind^="primary"] {{
   background: {T['cta']}; color: {T['cta_text']}; border-color: {T['cta']}; }}
-.stButton > button[kind="primary"]:hover, .stFormSubmitButton > button[kind="primary"]:hover {{
+.stButton > button[kind^="primary"]:hover, .stFormSubmitButton > button[kind^="primary"]:hover {{
   background: {T['cta_hover']}; color: {T['cta_text']}; }}
 .stButton > button:focus-visible {{ outline: 2px solid {T['accent']}; outline-offset: 2px; }}
 
@@ -149,6 +149,8 @@ div[data-testid="stExpander"] details {{ border: 1px solid {T['border']}; border
 .pn-bar .fill {{ height:100%; border-radius:6px; background:{T['text']}; }}
 .pn-bar.accent .fill {{ background:{T['accent']}; }}
 .pn-stats {{ display:grid; grid-template-columns:1fr 1fr; gap:8px; margin:12px 0 6px; }}
+.pn-stats.three {{ grid-template-columns:1fr 1fr 1fr; gap:6px; margin:12px 0 10px; }}
+.pn-stats.three .pn-stat .val {{ font-size:.98rem; }}
 .pn-stat {{ background:{T['surface_alt']}; border-radius:{T['radius_sm']}; padding:8px 10px; }}
 .pn-stat .k {{ font-size:.68rem; color:{T['text_muted']}; font-weight:600; text-transform:uppercase; letter-spacing:.06em; }}
 .pn-stat .val {{ font-size:1rem; font-weight:700; }}
@@ -215,6 +217,10 @@ def pct(x) -> str:
     return "–" if x is None else f"{x * 100:.0f}%"
 
 
+def pct1(x) -> str:
+    return "–" if x is None else f"{x * 100:.1f}%"
+
+
 def key(s: str) -> str:
     return "".join(c if c.isalnum() else "_" for c in s)
 
@@ -250,7 +256,9 @@ def gem_badge() -> str:
 
 
 def score_block(score: int, label: str = "Campaign score", xl: bool = False) -> str:
-    return (f'<div class="pn-score{" xl" if xl else ""}"><div class="num">{score}<small>/100</small></div>'
+    """The TOPSIS score: relative to the creators in this campaign (tooltip says so)."""
+    return (f'<div class="pn-score{" xl" if xl else ""}" title="Campaign score: ranking against the other creators '
+            f'in this campaign (AHP-weighted TOPSIS)"><div class="num">{score}<small>/100</small></div>'
             f'<div class="lbl">{esc(label)}</div></div>')
 
 

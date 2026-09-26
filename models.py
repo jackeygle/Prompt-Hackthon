@@ -10,12 +10,21 @@ class CampaignSpecDraft(BaseModel):
     product: str = Field(description="What is being promoted, e.g. 'refurbished gaming PCs'")
     product_keywords: list[str] = Field(description="Terms indicating product relevance, in German and English")
     niche: str = Field(description="Content niche creators should be in, e.g. 'PC gaming hardware'")
-    price_segment: str = Field(description="Product price segment, e.g. '€600–900'. NOT the campaign budget.")
+    price_segment: str | None = Field(default=None, description=(
+        "Product price segment if stated in the brief, e.g. '€600–900' (NOT the campaign budget); null if not stated"))
     target_country: str = Field(description="ISO 3166-1 alpha-2, e.g. 'DE'")
     target_language: str = Field(description="ISO 639-1, e.g. 'de'")
     audience: str = Field(description="Target audience description")
+    audience_interests: list[str] = Field(default_factory=list, description=(
+        "5-8 content topics this target audience already watches, broader than the product itself "
+        "(e.g. for gaming PCs: PC gaming, competitive gaming, game performance/FPS, GPUs & hardware, "
+        "gaming setups, tech reviews, budget gaming)"))
     goal: Literal["conversion", "awareness", "balanced"] = Field(description="Main campaign goal")
     search_queries: list[str] = Field(description="6 diverse YouTube search queries, mostly in the target language")
+    min_subscribers: int | None = Field(default=None, description="Minimum creator subscribers ONLY if explicitly "
+                                        "stated in the brief (e.g. 'at least 10k' -> 10000), else null")
+    max_subscribers: int | None = Field(default=None, description="Maximum creator subscribers ONLY if explicitly "
+                                        "stated in the brief (e.g. 'under 500k' -> 500000), else null")
     web_queries: list[str] = Field(default_factory=list, description=(
         "6 web search queries to discover creators and their cross-platform profiles: 2 general queries "
         "(e.g. lists of best creators in the niche/country), then one each starting with "
@@ -23,9 +32,13 @@ class CampaignSpecDraft(BaseModel):
 
 
 class CampaignSpec(CampaignSpecDraft):
-    """Draft + creator constraints set by the user (not by the LLM)."""
+    """Reviewed campaign settings. Values not stated in the brief carry recommended defaults;
+    `field_sources` records which ("brief" vs "default") so the UI never presents a default as extracted."""
+    price_segment: str = ""
     min_subscribers: int = 2_000
     max_subscribers: int = 3_000_000
+    n_creators: int = 10            # creators analysed in depth (set by the user, drives API cost)
+    field_sources: dict[str, str] = Field(default_factory=dict)
 
 
 # ---------- Web discovery ----------
@@ -75,6 +88,10 @@ class Evidence(BaseModel):
 class ContentFeatures(BaseModel):
     """Ordinal 0-3 scales. 0=none, 1=mentioned, 2=clearly present, 3=central/systematic."""
     niche_relevance: int = Field(ge=0, le=3, description="Fit with the campaign niche")
+    audience_relevance: int = Field(ge=0, le=3, description=(
+        "How strongly this content attracts the campaign's TARGET AUDIENCE (see audience interests), whether or "
+        "not it covers the product itself. E.g. popular PC-gaming or game-performance content scores high for a "
+        "gaming-PC campaign even without any PC building"))
     product_relevance: int = Field(ge=0, le=3, description="Covers the promoted product type (e.g. refurbished/used/prebuilt PCs)")
     price_segment_relevance: int = Field(ge=0, le=3, description="Discusses products in the campaign price segment")
     first_hand_experience: int = Field(ge=0, le=3, description="Creator personally uses/tests/builds the product")

@@ -39,9 +39,11 @@ N_QUERIES = 6
 SEARCH_RESULTS_PER_QUERY = 50
 MIN_SUBSCRIBERS = 2_000
 MAX_SUBSCRIBERS = 3_000_000
-N_AFTER_CHEAP_FILTER = 25
+N_AFTER_CHEAP_FILTER = 20     # minimum channels screened; actual = max(this, 2 x creators), capped
+MAX_SCREENED = 100
+DEFAULT_N_CREATORS = 10        # creators analysed in depth; user-selectable (5/10/20/50) per campaign
+N_CREATOR_OPTIONS = [5, 10, 20, 50]
 UPLOADS_TO_SCAN = 30
-N_DEEP = 15
 VIDEOS_PER_CREATOR = 5
 COMMENTS_PER_VIDEO = 50
 TRANSCRIPT_CHARS = 6_000   # per video; keeps content prompts within Groq free-tier TPM

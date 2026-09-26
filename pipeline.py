@@ -31,19 +31,37 @@ log = logging.getLogger("pipeline")
 
 SPEC_SYSTEM = """You turn a marketer's campaign brief into a structured campaign spec for creator discovery.
 Interpret price ranges like '€600–900' as the PRODUCT price segment, not the campaign budget.
-Write exactly 6 diverse YouTube search queries a target-audience viewer would type, mostly in the
-target language (e.g. German for Germany), covering: buying advice, used/refurbished, budget builds,
-price-segment comparisons, benchmarks. Keep each query short (2-6 words).
+List the audience_interests: the broader content this target audience already watches, not only the product.
+Write exactly 6 diverse YouTube search queries a target-audience viewer would type, mostly in the target
+language (e.g. German for Germany): about half about the product/purchase (buying advice, price segment,
+used/refurbished), the rest about the audience's interests (e.g. for gaming PCs: PC gaming, game performance,
+GPUs, gaming setups, tech reviews). Keep each query short (2-6 words).
+Only fill min_subscribers / max_subscribers / price_segment when the brief states them; otherwise null.
 Also write 6 web_queries for discovering creators and their profiles on other platforms (see field description)."""
 
 
 def parse_brief(llm: LLMClient, brief: str) -> CampaignSpec:
     """LLM extracts a draft; creator constraints get defaults the user can edit before the run."""
     draft = llm.extract(CampaignSpecDraft, SPEC_SYSTEM, brief)
-    if not draft.web_queries:
-        draft.web_queries = web.default_web_queries(CampaignSpec(**draft.model_dump()))
-    return CampaignSpec(**draft.model_dump(), min_subscribers=config.MIN_SUBSCRIBERS,
-                        max_subscribers=config.MAX_SUBSCRIBERS)
+    data = draft.model_dump()
+    sources = {}
+    defaults = {"min_subscribers": config.MIN_SUBSCRIBERS, "max_subscribers": config.MAX_SUBSCRIBERS,
+                "price_segment": ""}
+    for k, default in defaults.items():
+        extracted = data.get(k)
+        sources[k] = "brief" if extracted not in (None, "", 0) else "default"
+        data[k] = extracted if sources[k] == "brief" else default
+    if data["min_subscribers"] > data["max_subscribers"]:  # inconsistent extraction -> keep the stated bound only
+        data["max_subscribers"] = config.MAX_SUBSCRIBERS
+        sources["max_subscribers"] = "default"
+    if not data["audience_interests"]:
+        data["audience_interests"] = [data["niche"]]
+        sources["audience_interests"] = "default"
+    sources["n_creators"] = "default"
+    spec = CampaignSpec(**data, n_creators=config.DEFAULT_N_CREATORS, field_sources=sources)
+    if not spec.web_queries:
+        spec.web_queries = web.default_web_queries(spec)
+    return spec
 
 
 def _video_row(v: dict) -> dict:
@@ -151,7 +169,9 @@ def run_campaign(brief: str, spec: CampaignSpec | None = None, seed_handles: lis
         score = hits[cid] + 2 * web_hits.get(cid, 0)  # found on the web too -> stronger discovery signal
         cands.append((cid in seeds, score, subs, cid))
     cands.sort(reverse=True)
-    shortlist = [cid for *_, cid in cands[:config.N_AFTER_CHEAP_FILTER]]
+    # screen ~2x the requested creators (some fail relevance / hard filters); bounded for API cost
+    n_screen = min(max(config.N_AFTER_CHEAP_FILTER, 2 * spec.n_creators), config.MAX_SCREENED)
+    shortlist = [cid for *_, cid in cands[:n_screen]]
     p(f"Cheap filter: {len(chans)} → {len(shortlist)} channels "
       f"({sum(1 for c in shortlist if c in web_hits)} also found on the web)", 0.2)
 
@@ -182,7 +202,7 @@ def run_campaign(brief: str, spec: CampaignSpec | None = None, seed_handles: lis
 
     deep = sorted([cid for cid in shortlist if cid in relevance and relevance[cid].relevant_ids],
                   key=lambda c: (c in seeds, len(relevance[c].relevant_ids), hits[c] + 2 * web_hits.get(c, 0)),
-                  reverse=True)[:config.N_DEEP]
+                  reverse=True)[:spec.n_creators]
 
     # 5. Deep analysis per creator
     results: dict[str, dict] = {}

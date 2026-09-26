@@ -25,14 +25,14 @@ python check_setup.py      # one tiny request per API: shows exactly which keys/
 
 | Stage | Module | Provider | Notes |
 |---|---|---|---|
-| Brief → `CampaignSpec` (+ YouTube and web queries) | `pipeline.parse_brief` | Groq | 1 call; price range = product segment, not budget |
-| Human review / edit of the spec | `app.spec_editor` | – | product, niche, market, language, price, goal, queries, subscriber range, seeds |
+| Brief → `CampaignSpec` (+ audience interests, YouTube and web queries) | `pipeline.parse_brief` | Groq | 1 call; subscriber range and price only when stated in the brief, otherwise marked defaults (`field_sources`) |
+| Campaign settings (review / edit) | `app.campaign_form` | – | market, language, price, audience + interests, goal, subscriber range, **creators to analyse (5/10/20/50, default 10)**, searches, seeds |
 | YouTube search (market / language, last 12 months) | `youtube.py` | YouTube | 100 quota units per query |
 | Web discovery | `web_discovery.discover` | Tavily + Groq | 6 basic searches (general + `site:` TikTok/Instagram/Twitch/YouTube); profile URLs parsed deterministically; 1 LLM call extracts creator names from articles (names must appear in the cited result) |
 | Identity merge / dedup | `web_discovery.resolve_to_youtube` | YouTube | handles/channel IDs/normalised names → YouTube channels (≤15 `forHandle` lookups); unmatched → *web-only* list (not ranked) |
-| Cheap filter | `pipeline.run_campaign` | – | subscriber range from spec, country in market if declared, top 25 by search hits + 2×web mentions |
-| Upload screening | `features.relevant_video_ids` | Groq | 1 call per channel over its last 30 titles |
-| Deep analysis (top 15) | `features.py` | YouTube + Groq | 5 relevant videos, transcript if available else title+description, 50 comments/video |
+| Cheap filter | `pipeline.run_campaign` | – | subscriber range from spec, country in market if declared; screens max(20, 2×creators) channels (≤100) by search hits + 2×web mentions |
+| Upload screening | `features.relevant_video_ids` | Groq | 1 call per channel over its last 30 titles; a video counts if its viewers plausibly belong to the target audience (product/niche **or** the audience's interests, e.g. PC gaming, game performance, tech) |
+| Deep analysis (N creators, user-selected) | `features.py` | YouTube + Groq | 5 relevant videos, transcript if available else title+description, 50 comments/video |
 | Visual features | `vision.py` | OpenAI | 1 call per creator, 4 official thumbnail URLs, `detail=low` |
 | Hard filter → AHP → TOPSIS | `ranking.py` | – | deterministic; criteria with < 50% coverage are dropped and shown |
 | UI | `app.py` + `ui.py` | – | Campaign / Discover / Shortlist; creator cards, analysis with evidence cards, live AHP re-weighting, staged loader driven by real pipeline progress |
@@ -44,7 +44,8 @@ All YouTube and LLM responses are cached in SQLite (`api_cache`), so re-runs cos
 
 ## Criteria (B = benefit, C = cost)
 
-- **Campaign Fit**: niche, product, price-segment relevance (LLM) · target-language comment share (proxy for audience country)
+- **Campaign Fit**: **target-audience relevance** (0.30) · niche (0.20) · product (0.15) · price segment (0.10) (LLM) ·
+  target-language comment share (0.25, proxy for audience country). Hard filter passes if niche **or** audience relevance ≥ 1.
 - **Content Credibility**: first-hand experience, benchmarks, comparison, price discussion, purchase recommendation (LLM) ·
   product visible in thumbnails (VLM, sub-weight 0.10 → ~2% total weight; other visual tags are descriptive only)
 - **Audience Quality**: meaningful / technical+question / purchase-intent comment ratios · creator reply rate
@@ -86,12 +87,13 @@ goes through `LLMClient.extract(schema, system, user, images=None)` with Pydanti
 
 ## UI / design system
 
-Design direction: Prenew-inspired clean Nordic commerce × AI intelligence, **category-agnostic** — the UI never
-depends on the marketed category (gaming, fashion, beauty, food, …); only campaign content changes.
+Design direction: Prenew-inspired clean Nordic commerce × AI intelligence — a daily decision tool for Prenew's
+marketing team. Business context: gaming + technology audiences; visual design: professional, not gaming-themed.
 `ui.py` holds all design tokens (`TOKENS`), the global CSS and small render helpers (cards, score, confidence
 badge, metric bars, evidence cards, stage list). `.streamlit/config.toml` mirrors the main tokens for native widgets.
 The palette is a provisional Prenew-inspired one — replace the hex values in `TOKENS` (and the config file)
 with the brand's exact colours. Group scores on cards (Campaign fit, Community, Performance, Product evidence)
-are the weighted TOPSIS closeness per criterion group, relative to the ranked candidate set; **Hidden gem** =
+are weighted TOPSIS closeness values (Audience relevance, Content relevance, Community quality, Market fit),
+relative to the ranked candidate set; **Hidden gem** =
 campaign fit ≥ 75, campaign score ≥ median and fewer subscribers than the median ranked creator. Shortlists are stored per campaign in a
 `shortlist` table.

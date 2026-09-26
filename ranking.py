@@ -23,10 +23,12 @@ class Criterion:
 GROUPS = ["Campaign Fit", "Content Credibility", "Audience Quality", "Reach & Performance", "Cost & Risk"]
 
 CRITERIA = [
-    Criterion("niche_relevance", "Campaign Fit", "B", 0.30, "Niche relevance"),
-    Criterion("product_relevance", "Campaign Fit", "B", 0.30, "Product relevance"),
-    Criterion("price_segment_relevance", "Campaign Fit", "B", 0.20, "Price-segment relevance"),
-    Criterion("target_lang_share", "Campaign Fit", "B", 0.20, "Target-language audience (proxy)"),
+    # audience relevance weighs most: the creator's value is who watches, not how close the content is to the product
+    Criterion("audience_relevance", "Campaign Fit", "B", 0.30, "Target-audience relevance"),
+    Criterion("niche_relevance", "Campaign Fit", "B", 0.20, "Niche relevance"),
+    Criterion("product_relevance", "Campaign Fit", "B", 0.15, "Product relevance"),
+    Criterion("price_segment_relevance", "Campaign Fit", "B", 0.10, "Price-segment relevance"),
+    Criterion("target_lang_share", "Campaign Fit", "B", 0.25, "Target-language audience (proxy)"),
     Criterion("first_hand_experience", "Content Credibility", "B", 0.30, "First-hand experience"),
     Criterion("benchmark_discussion", "Content Credibility", "B", 0.20, "Benchmarks"),
     Criterion("product_comparison", "Content Credibility", "B", 0.15, "Product comparison"),
@@ -105,8 +107,9 @@ def hard_filter(f: dict) -> tuple[bool, str]:
         reasons.append(f"no relevant upload in last {config.MAX_DAYS_SINCE_UPLOAD} days")
     if (f.get("n_relevant_videos") or 0) < config.MIN_RELEVANT_VIDEOS:
         reasons.append(f"fewer than {config.MIN_RELEVANT_VIDEOS} relevant videos")
-    if f.get("niche_relevance") is not None and f["niche_relevance"] < config.MIN_NICHE_RELEVANCE:
-        reasons.append("niche relevance too low")
+    relevance = max(f.get("niche_relevance") or 0, f.get("audience_relevance") or 0)
+    if f.get("niche_relevance") is not None and relevance < config.MIN_NICHE_RELEVANCE:
+        reasons.append("niche and audience relevance too low")
     lang = f.get("target_lang_share")
     if lang is not None and lang < config.MIN_TARGET_LANG_SHARE:
         reasons.append(f"only {lang:.0%} of comments in target language")

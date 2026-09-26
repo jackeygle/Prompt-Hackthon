@@ -13,7 +13,7 @@ import config
 from llm import LLMClient
 from models import CampaignSpec, CommentBatch, ContentFeatures, RelevantVideos
 
-CONTENT_FEATURES = ["niche_relevance", "product_relevance", "price_segment_relevance", "first_hand_experience",
+CONTENT_FEATURES = ["niche_relevance", "audience_relevance", "product_relevance", "price_segment_relevance", "first_hand_experience",
                     "benchmark_discussion", "price_discussion", "product_comparison", "purchase_recommendation"]
 
 
@@ -56,15 +56,17 @@ def statistical_features(relevant: list[dict], all_uploads: list[dict], subscrib
 
 # ---------------------------------------------------------------- relevance of uploads
 RELEVANCE_SYSTEM = """You screen YouTube channels for an influencer-marketing campaign.
-Given the campaign and a channel's recent video titles, return the IDs of videos that are relevant to
-the campaign niche or product (e.g. PC hardware, gaming PCs, builds, upgrades, buying advice, benchmarks).
-Exclude unrelated videos (vlogs, pure gameplay without hardware focus, unrelated tech)."""
+Given the campaign and a channel's recent video titles, return the IDs of videos whose viewers plausibly
+belong to the campaign's TARGET AUDIENCE: videos about the product or niche, AND videos about the topics that
+audience already watches (its audience interests). A video does not need to mention the product to count.
+Exclude videos with no plausible connection to that audience (unrelated lifestyle, news, music, etc.)."""
 
 
 def relevant_video_ids(llm: LLMClient, spec: CampaignSpec, channel_title: str, uploads: list[dict]) -> RelevantVideos:
     lines = "\n".join(f"{u['id']} | {u['title']}" for u in uploads)
-    user = (f"Campaign niche: {spec.niche}\nProduct: {spec.product}\nKeywords: {', '.join(spec.product_keywords)}\n\n"
-            f"Channel: {channel_title}\nVideos (id | title):\n{lines}")
+    user = (f"Campaign niche: {spec.niche}\nProduct: {spec.product}\nKeywords: {', '.join(spec.product_keywords)}\n"
+            f"Target audience: {spec.audience}\nAudience interests: {', '.join(spec.audience_interests) or spec.niche}"
+            f"\n\nChannel: {channel_title}\nVideos (id | title):\n{lines}")
     out = llm.extract(RelevantVideos, RELEVANCE_SYSTEM, user)
     valid = {u["id"] for u in uploads}
     out.relevant_ids = [i for i in out.relevant_ids if i in valid]
@@ -93,7 +95,8 @@ def content_features(llm: LLMClient, spec: CampaignSpec, channel_title: str, vid
     """Returns (features dict, verified evidence list, summary)."""
     blocks = "\n\n".join(f"=== video_id: {v['id']} ===\n{_video_text(v)}" for v in vids)
     user = (f"CAMPAIGN\nProduct: {spec.product}\nPrice segment: {spec.price_segment}\nNiche: {spec.niche}\n"
-            f"Audience: {spec.audience}\n\nCREATOR: {channel_title}\n\n{blocks}")
+            f"Audience: {spec.audience}\nAudience interests: {', '.join(spec.audience_interests) or spec.niche}"
+            f"\n\nCREATOR: {channel_title}\n\n{blocks}")
     out = llm.extract(ContentFeatures, CONTENT_SYSTEM, user)
 
     # Deterministic hallucination guard: a quote must appear in the source text of that video.
@@ -106,7 +109,7 @@ def content_features(llm: LLMClient, spec: CampaignSpec, channel_title: str, vid
     for name in CONTENT_FEATURES:
         score = getattr(out, name)
         has_proof = any(ev["verified"] and ev["feature"] == name for ev in evidence)
-        if score >= 2 and not has_proof and name != "niche_relevance":
+        if score >= 2 and not has_proof and name not in ("niche_relevance", "audience_relevance"):
             score -= 1  # unsupported high score -> downgrade
         feats[name] = float(score)
     return feats, evidence, out.summary
