@@ -231,19 +231,14 @@ div[class*="st-key-card"]:hover {{ border-color:#256F50; box-shadow:0 8px 22px #
 .pn-stages li.done .st {{ color:white; }}
 .pn-card-head .name {{ white-space:normal; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; }}
 .pn-bar.na .v {{ color:{T['text_subtle']}; font-weight:600; font-size:.75rem; }}
-/* top bar: breadcrumb (Campaigns › campaign › creator) + cart-style shortlist */
-div[class*="st-key-crumbs"] {{ flex-wrap:nowrap; min-width:0; }}
-div[class*="st-key-crumbs"] .pn-brand {{ margin-right:10px; }}
-div[class*="st-key-crumbs"] .stButton > button[kind="tertiary"] {{ color:{T['text_muted']}; font-weight:600; min-height:32px;
-  padding:4px 2px; }}
-div[class*="st-key-crumbs"] .stButton > button[kind="tertiary"]:hover {{ color:{T['accent']}; text-decoration:underline; }}
-div[class*="st-key-crumb_campaign"] {{ min-width:0; max-width:300px; }}
-div[class*="st-key-crumb_campaign"] button {{ max-width:100%; }}
-div[class*="st-key-crumb_campaign"] button p {{ white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }}
-.pn-crumb-sep {{ color:{T['text_subtle']}; font-weight:600; margin:0 4px; }}
+/* top bar: logo + cart-style shortlist; back link to the parent level on its own line above the title */
+div[class*="st-key-back"] {{ margin-top:14px; }}
+div[class*="st-key-back"] .stButton > button[kind="tertiary"] {{ font-weight:600; min-height:28px; padding:2px 0;
+  max-width:520px; }}
+div[class*="st-key-back"] .stButton > button p {{ white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }}
+div[class*="st-key-back"] .stButton > button[kind="tertiary"]:hover {{ text-decoration:underline; }}
 div[class*="st-key-cart"] button {{ border-radius:999px !important; }}
 div[class*="st-key-cart-on"] button {{ border-color:#256F50 !important; background:#EBFDEB !important; color:#256F50 !important; }}
-@media (max-width:900px) {{ div[class*="st-key-crumbs"] .pn-brand .product {{ display:none; }} }}
 /* deep-green top band (Prenew hero): full-bleed behind nav + page title, light text inside */
 div[class*="st-key-band"] {{ background:#256F50; box-shadow:0 0 0 100vmax #256F50;
   clip-path:inset(-100vmax -100vmax 0 -100vmax); padding:4px 0 26px; margin-bottom:26px; color:#fff; }}
@@ -258,9 +253,8 @@ div[class*="st-key-band"] .pn-hero-slim {{ background:transparent; padding:6px 0
 div[class*="st-key-band"] .stButton > button[kind="tertiary"] {{ color:#CFE9D6 !important; }}
 div[class*="st-key-band"] .stButton > button[kind="tertiary"]:hover {{ color:#9DF69A !important; }}
 div[class*="st-key-band"] .pn-band-title {{ font-family:'Sora',sans-serif; font-weight:700; color:#fff; line-height:1.2;
-  font-size:clamp(1.6rem,2.6vw,2.3rem); letter-spacing:-.02em; margin:22px 0 12px; }}
+  font-size:clamp(1.6rem,2.6vw,2.3rem); letter-spacing:-.02em; margin:2px 0 12px; }}
 div[class*="st-key-band"] .pn-band-meta {{ display:flex; flex-wrap:wrap; align-items:center; gap:6px 0; }}
-div[class*="st-key-band"] .pn-crumb-sep {{ color:#7CA996; }}
 div[class*="st-key-band"] div[class*="st-key-cart"] button {{ background:transparent !important; color:#fff !important;
   border-color:rgba(255,255,255,.45) !important; }}
 div[class*="st-key-band"] div[class*="st-key-cart"] button:hover {{ border-color:#9DF69A !important; color:#9DF69A !important; }}
