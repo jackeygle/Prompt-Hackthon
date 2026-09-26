@@ -340,11 +340,11 @@ def campaign_page(campaigns: list[dict]) -> None:
     slim = bool(campaigns) and not running and not parse and ss.get("draft") is None
     if slim:
         with band:
-            html('<div class="pn-hero-slim"><span class="t">Find the creators our gamers already watch.</span>'
-                 '<span class="p">01 · Brief → 02 · Creators → 03 · Shortlist</span></div>')
-        reports, form = st.columns([1.7, 1], gap="large")
-        with reports:
-            recent_campaigns(campaigns, n_cols=2)
+            pitch, form = st.columns([1, 1.35], gap="large", vertical_alignment="center")
+            with pitch:
+                html('<div class="pn-hero-slim"><div class="pn-kicker">New campaign</div>'
+                     '<div class="t">Find the creators our gamers already watch.</div>'
+                     '<div class="p">01 · Brief <span>→</span> 02 · Creators <span>→</span> 03 · Shortlist</div></div>')
     else:
         hero, form = st.columns([1, 1.1], gap="large")
         with hero:
@@ -373,20 +373,22 @@ def campaign_page(campaigns: list[dict]) -> None:
                     st.error(f"Discovery failed: {e}")
                 return
             if ss.get("draft") is None:
-                html(ui.steps(0) + f'<div class="pn-kicker">{"New campaign" if slim else "Campaign brief"}</div>')
+                html((ui.steps(0) if not slim else "") + f'<div class="pn-kicker">Campaign brief</div>')
                 with st.form("brief_form", border=False):
-                    st.text_area("Campaign brief", value="", height=150, placeholder="Describe your campaign…",
+                    st.text_area("Campaign brief", value="", height=110 if slim else 150,
+                                 placeholder="Describe your campaign…",
                                  label_visibility="collapsed", key="campaign_brief_v2")
                     if ss.pop("brief_error", False):
                         st.warning("Describe your campaign before continuing.")
-                    html(f'<div class="pn-subtle" style="margin:-4px 0 12px">{esc(BRIEF_EXAMPLES)}</div>')
-                    st.form_submit_button("Continue →", type="primary", width="stretch",
-                                          on_click=_submit_brief)
+                    ex, go_col = st.columns([2.2, 1], vertical_alignment="center")
+                    ex.markdown(f'<div class="pn-subtle">{esc(BRIEF_EXAMPLES)}</div>', unsafe_allow_html=True)
+                    with go_col:
+                        st.form_submit_button("Continue →", type="primary", width="stretch",
+                                              on_click=_submit_brief)
             else:
                 html(ui.steps(1))
                 campaign_form(ss.draft)
-    if not slim:
-        recent_campaigns(campaigns)
+    recent_campaigns(campaigns)
 
 
 def campaign_form(draft: CampaignSpec) -> None:
@@ -438,31 +440,52 @@ def campaign_form(draft: CampaignSpec) -> None:
                                   on_click=_submit_settings)
 
 
+def rel_time(iso: str) -> str:
+    """'Today 14:26', 'Yesterday 09:10', '3 days ago', or the date for older reports."""
+    from datetime import datetime, timezone
+    try:
+        t = datetime.fromisoformat(iso.replace("Z", "+00:00"))
+    except ValueError:
+        return iso[:16]
+    days = (datetime.now(timezone.utc).date() - t.date()).days
+    if days == 0:
+        return f"Today {t:%H:%M}"
+    if days == 1:
+        return f"Yesterday {t:%H:%M}"
+    return f"{days} days ago" if days < 7 else f"{t:%d %b %Y}"
+
+
 def recent_campaigns(campaigns: list[dict], n_cols: int = 3) -> None:
-    st.write("")
-    st.markdown("#### Recent campaigns")
+    """Report history as a compact list: identity, key settings, size, age; open and delete per row."""
     if not campaigns:
+        st.write("")
         ui.empty_state("No campaigns yet.", "Describe a campaign above to find creators.")
         return
     counts = {c["id"]: db.query("SELECT COUNT(*) n FROM rankings WHERE campaign_id=? AND passed_hard_filter=1",
                                 (c["id"],))[0]["n"] for c in campaigns}
     empty = [c for c in campaigns if not counts[c["id"]]]
     shown = campaigns if ss.get("show_empty_reports") else [c for c in campaigns if counts[c["id"]]]
-    cols = st.columns(n_cols)
-    for i, c in enumerate(shown):
-        spec = CampaignSpec.model_validate_json(c["spec_json"])
-        n = counts[c["id"]]
-        with cols[i % n_cols], st.container(key=f"card-camp-{ui.key(c['id'])}"):
-            html(f'<div class="pn-subtle">{esc(c["created_at"][:16].replace("T", " "))} · '
-                 f'{n} creator{"s" if n != 1 else ""}</div>'
-                 f'<div style="font-weight:650;margin:4px 0 8px">{esc(spec.product)}</div>'
-                 + ui.chip(COUNTRY.get(spec.target_country, spec.target_country))
-                 + (ui.chip(spec.price_segment) if spec.price_segment else "") + ui.chip(spec.goal.capitalize()))
-            open_col, menu = st.columns([4, 1], vertical_alignment="center")
-            open_col.button("Open →", key=f"open_{c['id']}", on_click=lambda i=c["id"]: (
-                ss.update(campaign=i, view="discover", creator=None)), width="stretch")
-            with menu.popover("⋯", width="stretch"):
-                if st.button("Delete report", key=f"delete_{c['id']}", type="tertiary"):
+    html(f'<div class="pn-list-head"><span class="t">Recent campaigns</span>'
+         f'<span class="n">{len(shown)} report{"s" if len(shown) != 1 else ""}</span></div>')
+    with st.container(key="reportlist"):
+        for c in shown:
+            spec = CampaignSpec.model_validate_json(c["spec_json"])
+            n = counts[c["id"]]
+            brief = " ".join((c.get("brief") or "").split())
+            brief = brief if len(brief) <= 90 else brief[:87] + "…"
+            specs = " · ".join(x for x in [spec.target_country, spec.price_segment, spec.goal.capitalize()] if x)
+            with st.container(key=f"row-camp-{ui.key(c['id'])}", horizontal=True, vertical_alignment="center",
+                              gap="small"):
+                html(f'<div class="pn-row-main"><div class="nm">{esc(spec.product)}</div>'
+                     f'<div class="br">{esc(brief) if brief else "&nbsp;"}</div></div>')
+                html(f'<div class="pn-row-spec">{esc(specs)}</div>')
+                html(f'<div class="pn-row-num"><b>{n}</b> creator{"s" if n != 1 else ""}</div>')
+                html(f'<div class="pn-row-time">{esc(rel_time(c["created_at"]))}</div>')
+                st.button("Open", key=f"open_{c['id']}", type="tertiary", icon=":material/arrow_forward:",
+                          icon_position="right", on_click=lambda i=c["id"]: (
+                              ss.update(campaign=i, view="discover", creator=None)))
+                if st.button("", key=f"delete_{c['id']}", type="tertiary", icon=":material/delete:",
+                             help="Delete report"):
                     confirm_delete(c["id"], spec.product)
     if empty:
         st.toggle(f"Show reports without results ({len(empty)})", key="show_empty_reports")

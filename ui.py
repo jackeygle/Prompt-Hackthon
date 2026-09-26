@@ -66,7 +66,7 @@ CONFIDENCE_STYLE = {  # text is always shown; colour is secondary
 def inject_css() -> None:
     st.markdown(f"""
 <style>
-@import url('https://fonts.googleapis.com/css2?family=Sora:wght@400;600;700;800&family=Titillium+Web:wght@400;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Sora:wght@400;600;700;800&family=Titillium+Web:wght@400;600;700&family=JetBrains+Mono:wght@500;700&display=swap');
 :root {{ --radius: {T['radius']}; }}
 html, body, [data-testid="stAppViewContainer"], .stApp {{ background: {T['bg']}; color: {T['text']};
   font-family: {T['font']}; }}
@@ -290,6 +290,82 @@ div[class*="st-key-card-cr-"] {{ container-type:inline-size; }}  /* creator card
  .pn-card-head {{ flex-wrap:wrap; }}
 }}
 @media (prefers-reduced-motion:reduce) {{ * {{ transition:none !important; animation:none !important; }} }}
+/* ===== Gaming-PC identity, built only from Prenew's palette: perforated case mesh, spec-sheet numerals,
+   dark "case" card heads, one lime accent strip. No RGB, glow or animation beyond hover. ===== */
+:root {{ --pn-green:#256F50; --pn-lime:#9DF69A; --pn-navy:#1D1D35;
+  --pn-mono:'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }}
+/* spec-sheet numerals: every figure a marketer compares */
+.pn-score .num, .pn-stat .val, .pn-bar .v, .pn-rank, .pn-row-num b, .pn-row-time, .pn-row-spec,
+.pn-list-head .n, .pn-hero-slim .p {{ font-family:var(--pn-mono); font-variant-numeric:tabular-nums; }}
+.pn-score .num {{ letter-spacing:-.05em; }}
+/* top band: case-mesh perforation fading in from the right + lime accent strip at the bottom */
+div[class*="st-key-band"] {{ position:relative; }}
+div[class*="st-key-band"]::before {{ content:""; position:absolute; top:0; bottom:0; left:-100vmax; right:-100vmax;
+  pointer-events:none; background-image:radial-gradient(rgba(157,246,154,.22) 1.3px, transparent 1.6px);
+  background-size:13px 13px; -webkit-mask-image:linear-gradient(90deg, transparent 52%, #000 88%);
+  mask-image:linear-gradient(90deg, transparent 52%, #000 88%); }}
+div[class*="st-key-band"]::after {{ content:""; position:absolute; left:-100vmax; right:-100vmax; bottom:0; height:4px;
+  background:var(--pn-lime); pointer-events:none; }}
+div[class*="st-key-band"] > div {{ position:relative; z-index:1; }}
+/* campaign home: pitch left, the brief box is the hero on the right */
+div[class*="st-key-band"] .pn-hero-slim {{ display:block; padding:18px 0 8px; }}
+div[class*="st-key-band"] .pn-hero-slim .t {{ font-size:clamp(1.9rem,3vw,2.6rem); line-height:1.12; font-weight:800;
+  letter-spacing:-.03em; margin:4px 0 14px; }}
+div[class*="st-key-band"] .pn-hero-slim .p {{ color:var(--pn-lime); font-size:.82rem; letter-spacing:.02em; }}
+div[class*="st-key-band"] .pn-hero-slim .p span {{ opacity:.55; margin:0 4px; }}
+div[class*="st-key-band"] div[class*="st-key-panel-campaign"] {{ background:#fff; border:none; border-radius:20px;
+  box-shadow:0 22px 48px rgba(10,30,20,.28); padding:20px 22px 16px; color:var(--pn-navy); margin:10px 0 6px; }}
+div[class*="st-key-band"] div[class*="st-key-panel-campaign"] .pn-kicker {{ color:var(--pn-green); }}
+div[class*="st-key-band"] div[class*="st-key-panel-campaign"] .pn-subtle {{ color:{T['text_subtle']}; }}
+.stFormSubmitButton > button[kind^="primary"] p, .stButton > button[kind^="primary"] p {{ font-weight:700; }}
+.stFormSubmitButton > button[kind^="primary"], .stButton > button[kind^="primary"] {{
+  box-shadow:inset 0 -2px 0 rgba(37,111,80,.35); }}
+/* report history: compact list, one row per report */
+.pn-list-head {{ display:flex; align-items:baseline; gap:12px; margin:6px 0 10px; }}
+.pn-list-head .t {{ font-family:'Sora',sans-serif; font-weight:700; font-size:1.3rem; color:var(--pn-navy); }}
+.pn-list-head .n {{ font-size:.78rem; color:{T['text_subtle']}; }}
+div[class*="st-key-reportlist"] {{ background:#fff; border:1px solid {T['border']}; border-radius:18px;
+  gap:0 !important; padding:4px 0; }}
+div[class*="st-key-row-camp-"] {{ padding:12px 10px 12px 20px; border-bottom:1px solid {T['surface_alt']};
+  transition:background .12s ease; border-left:3px solid transparent; }}
+div[class*="st-key-row-camp-"]:last-child {{ border-bottom:none; }}
+div[class*="st-key-row-camp-"]:hover {{ background:#F4FEF4; border-left-color:var(--pn-lime); }}
+div[class*="st-key-row-camp-"] > div {{ flex:0 0 auto !important; width:auto !important; }}
+div[class*="st-key-row-camp-"] > div:first-child {{ flex:1 1 auto !important; min-width:0; }}
+.pn-row-main .nm {{ font-weight:700; color:var(--pn-navy); font-size:1rem; }}
+.pn-row-main .br {{ font-size:.82rem; color:{T['text_subtle']}; white-space:nowrap; overflow:hidden;
+  text-overflow:ellipsis; max-width:520px; }}
+.pn-row-spec {{ width:230px; font-size:.78rem; color:{T['text_muted']}; white-space:nowrap; overflow:hidden;
+  text-overflow:ellipsis; }}
+.pn-row-num {{ width:108px; font-size:.82rem; color:{T['text_muted']}; }}
+.pn-row-num b {{ color:var(--pn-navy); font-size:.95rem; }}
+.pn-row-time {{ width:118px; font-size:.78rem; color:{T['text_subtle']}; }}
+div[class*="st-key-open_"] button {{ color:var(--pn-green) !important; font-weight:700; min-height:36px; }}
+div[class*="st-key-open_"] button:hover {{ color:var(--pn-navy) !important; text-decoration:none !important; }}
+div[class*="st-key-delete_"] button {{ color:#A9AABC !important; min-height:36px; padding:4px 8px !important;
+  border-radius:10px !important; }}
+div[class*="st-key-delete_"] button:hover {{ color:#BF000F !important; background:#FDECEC !important;
+  text-decoration:none !important; }}
+/* creator card: dark "case" head with perforation, lime benchmark-style score, light spec body */
+div[class*="st-key-card-cr-"] {{ padding-top:0 !important; overflow:hidden; border-top:1px solid {T['border']} !important;
+  transition:transform .15s ease, box-shadow .15s ease, border-color .15s ease; }}
+div[class*="st-key-card-cr-"]:hover {{ transform:translateY(-2px); border-color:var(--pn-green) !important;
+  box-shadow:0 14px 30px rgba(29,29,53,.12); }}
+div[class*="st-key-card-cr-"] .pn-card-head {{ margin:0 -20px 4px; padding:18px 20px 16px; color:#fff;
+  background-color:var(--pn-navy); background-image:radial-gradient(rgba(157,246,154,.13) 1.2px, transparent 1.5px);
+  background-size:11px 11px; background-position:right top; border-bottom:3px solid var(--pn-lime); }}
+div[class*="st-key-card-cr-"] .pn-card-head .name {{ color:#fff; }}
+div[class*="st-key-card-cr-"] .pn-card-head .meta {{ color:#B9BACB; }}
+div[class*="st-key-card-cr-"] .pn-rank {{ color:var(--pn-lime); font-size:.68rem; white-space:nowrap; overflow:hidden;
+  text-overflow:ellipsis; margin-bottom:3px; }}
+div[class*="st-key-card-cr-"] .pn-card-head .name {{ font-size:1.05rem; }}
+div[class*="st-key-card-cr-"] .pn-avatar {{ border:2px solid rgba(157,246,154,.55); background-color:#2C2C4A; color:#DADAE6; }}
+div[class*="st-key-card-cr-"] .pn-score {{ background:var(--pn-lime); border:none; color:var(--pn-navy);
+  padding:8px 10px; border-radius:12px; flex:none; }}
+div[class*="st-key-card-cr-"] .pn-score .num {{ font-size:1.7rem; }}
+div[class*="st-key-card-cr-"] .pn-score .lbl {{ font-size:.58rem; }}
+div[class*="st-key-card-cr-"] .pn-score .num small {{ color:var(--pn-green); }}
+div[class*="st-key-card-cr-"] .pn-score .lbl {{ color:var(--pn-navy); opacity:.75; }}
 </style>""", unsafe_allow_html=True)
 
 
