@@ -445,7 +445,7 @@ def _submit_settings() -> None:
         target_country=g("country").strip().upper(), target_language=g("lang").strip().lower(), goal=g("goal"),
         audience=g("audience"), audience_interests=commas("interests"), product_keywords=commas("keywords"),
         search_queries=lines("yt_q"), creator_queries=lines("cr_q"), web_queries=lines("web_q"),
-        current_topics=draft.current_topics, topics_source=draft.topics_source, min_subscribers=int(g("min_subscribers")),
+        current_topics=draft.current_topics, topics_source=draft.topics_source, strategy_notes=draft.strategy_notes, min_subscribers=int(g("min_subscribers")),
         max_subscribers=int(g("max_subscribers")), n_creators=int(g("n_creators")),
         budget_per_video=int(g("budget") or 0), field_sources=sources)
     ss.run_request = (spec, ss.get("draft_brief", DEFAULT_BRIEF), commas("seeds"))
@@ -545,7 +545,10 @@ def campaign_form(draft: CampaignSpec) -> None:
                   "evidence). More creators take longer and use more API quota.")
         html(f'<div class="pn-subtle" style="margin:-6px 0 8px">10 creators {esc(cost_estimate(10))} · '
              f'50 creators {esc(cost_estimate(50))}</div>')
-        with st.expander("Search setup"):
+        if draft.strategy_notes:  # research / planning fell back: say so before anything is created
+            st.warning("**The search strategy is incomplete.** " + " ".join(draft.strategy_notes)
+                       + " Check the searches under Search setup.", icon=":material/warning:")
+        with st.expander("Search setup", expanded=bool(draft.strategy_notes)):
             st.text_input("Niche", draft.niche, key=k + "niche")
             st.text_input("Product keywords", ", ".join(draft.product_keywords), key=k + "keywords")
             if draft.current_topics:
@@ -553,11 +556,14 @@ def campaign_form(draft: CampaignSpec) -> None:
                      f'({esc(draft.topics_source)}): '
                      + esc(" · ".join(t.name for t in draft.current_topics)) + "</div>")
             else:
-                html('<div class="pn-subtle" style="margin-bottom:6px">No current-topic research (no web search '
-                     'available); searches are based on model knowledge.</div>')
+                html('<div class="pn-subtle" style="margin-bottom:6px">No current topics were found; the searches '
+                     'below are based on model knowledge.</div>')
             st.text_area("Topic & content searches, YouTube (one per line)", "\n".join(draft.search_queries),
                          height=130, key=k + "yt_q", help="Main path: videos about what the audience follows now; "
                          "the channels behind them become candidates.")
+            if config.N_QUERIES < len(draft.search_queries):
+                html(f'<div class="pn-subtle" style="margin:-6px 0 8px">Only the first {config.N_QUERIES} of these '
+                     f'run (N_QUERIES={config.N_QUERIES} in .env limits YouTube quota use).</div>')
             st.text_area("Direct creator searches, YouTube (one per line)", "\n".join(draft.creator_queries),
                          height=70, key=k + "cr_q", help="Secondary path: 'best / top creators' style searches.")
             st.text_area("Web & social searches (one per line)", "\n".join(draft.web_queries), height=130,

@@ -70,10 +70,13 @@ def test_without_web_search_it_says_so(monkeypatch):
     assert "no web research available" in next(u for n, _, u in llm.prompts if n == "SearchPlan")
 
 
-def test_planning_failure_keeps_the_briefs_queries(monkeypatch):
+def test_planning_failure_is_explained_and_topped_up_with_topics(monkeypatch):
     monkeypatch.setattr(web, "research_current_topics", lambda spec, llm: (TOPICS, None))
     spec = pipeline.parse_brief(FakeLLM(fail_plan=True), "brief")
-    assert spec.search_queries == DRAFT.search_queries
+    # the brief's own searches first, then the concrete researched topics, never a silent single query
+    assert spec.search_queries == [*DRAFT.search_queries, "Counter-Strike 2", "RTX 5070"]
+    assert spec.field_sources["search_queries"] == "fallback"
+    assert any("Search planning failed (model down)" in n for n in spec.strategy_notes)
 
 
 def test_prompts_are_topic_agnostic():
@@ -170,3 +173,35 @@ def test_research_uses_the_model_search_with_its_provider(monkeypatch):
     monkeypatch.setattr(web, "openai_web_search", fake)
     topics, err = web.research_current_topics(pipeline.CampaignSpec(**DRAFT.model_dump(exclude_none=True)), None)
     assert err is None and seen["via"] == "azure" and topics[0].name == "Counter-Strike 2"
+
+
+def test_partial_plan_and_failed_research_are_reported(monkeypatch):
+    monkeypatch.setattr(web, "research_current_topics", lambda spec, llm: ([], "azure: HTTP 400; openai: HTTP 429"))
+    spec = pipeline.parse_brief(FakeLLM(SearchPlan(content_queries=["Patch 26.18 Tier List"])), "brief")
+    assert spec.search_queries == ["Patch 26.18 Tier List"]
+    assert any("Current-topic research failed (azure: HTTP 400; openai: HTTP 429)" in n for n in spec.strategy_notes)
+    assert any("only 1 of 6 content searches" in n for n in spec.strategy_notes)
+
+
+def test_plan_without_content_queries_falls_back_with_a_note(monkeypatch):
+    monkeypatch.setattr(web, "research_current_topics", lambda spec, llm: (TOPICS, None))
+    spec = pipeline.parse_brief(FakeLLM(SearchPlan(creator_queries=["top lol youtubers"])), "brief")
+    assert spec.field_sources["search_queries"] == "fallback" and len(spec.search_queries) == 4
+    assert any("no content searches" in n for n in spec.strategy_notes)
+
+
+def test_the_plan_always_proposes_six_even_if_fewer_run(monkeypatch):
+    monkeypatch.setattr(config, "N_QUERIES", 1)
+    monkeypatch.setattr(web, "research_current_topics", lambda spec, llm: (TOPICS, None))
+    llm = FakeLLM(SearchPlan(content_queries=[f"q{i}" for i in range(8)], creator_queries=["c"]))
+    spec = pipeline.parse_brief(llm, "brief")
+    assert len(spec.search_queries) == 6 and not spec.strategy_notes
+    assert "Write 6 content_queries" in next(u for n, _, u in llm.prompts if n == "SearchPlan")
+    assert pipeline.discovery_queries(spec) == ["q0"]  # N_QUERIES=1: only the first one runs
+
+
+@pytest.mark.parametrize("kind,expected", [("creator", "topic"), ("Tournament", "event"), ("patch", "topic"),
+                                           ("game", "game"), (None, "topic")])
+def test_unexpected_topic_kinds_do_not_break_research(kind, expected):
+    research = TopicResearch.model_validate({"topics": [{"name": "Faker", "kind": kind}, {"name": " ", "kind": "game"}]})
+    assert [(t.name, t.kind) for t in research.topics] == [("Faker", expected)]
