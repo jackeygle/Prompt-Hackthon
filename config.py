@@ -13,7 +13,7 @@ GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 AZURE_OPENAI_ENDPOINT = os.getenv("AZURE_OPENAI_ENDPOINT", "")
 AZURE_OPENAI_API_KEY = os.getenv("AZURE_OPENAI_API_KEY", "")
-AZURE_OPENAI_DEPLOYMENT = os.getenv("AZURE_OPENAI_DEPLOYMENT", "gpt-5.6-sol")
+AZURE_OPENAI_DEPLOYMENT = os.getenv("AZURE_OPENAI_DEPLOYMENT", "gpt-5.4-mini")
 TAVILY_API_KEY = os.getenv("TAVILY_API_KEY", "")
 TWITCH_CLIENT_ID = os.getenv("TWITCH_CLIENT_ID", "")
 TWITCH_CLIENT_SECRET = os.getenv("TWITCH_CLIENT_SECRET", "")
@@ -22,10 +22,10 @@ INSTAGRAM_USER_ID = os.getenv("INSTAGRAM_USER_ID", "")  # optional: found via /m
 
 DB_PATH = Path(os.getenv("DB_PATH", ROOT / "data" / "creator_intel.db"))
 
-# One model for the whole pipeline: gpt-5.6-sol on Azure (text extraction, vision on thumbnails, web search).
+# One model for the whole pipeline: gpt-5.4-mini on Azure (text extraction, vision on thumbnails, web search).
 # "provider/model", tried in order; add fallbacks via LLM_MODELS / VLM_MODELS if needed.
-LLM_MODELS = [m.strip() for m in os.getenv("LLM_MODELS", "azure/gpt-5.6-sol").split(",") if m.strip()]
-VLM_MODELS = [m.strip() for m in os.getenv("VLM_MODELS", "azure/gpt-5.6-sol").split(",") if m.strip()]
+LLM_MODELS = [m.strip() for m in os.getenv("LLM_MODELS", "azure/gpt-5.4-mini").split(",") if m.strip()]
+VLM_MODELS = [m.strip() for m in os.getenv("VLM_MODELS", "azure/gpt-5.4-mini").split(",") if m.strip()]
 LLM_CONCURRENCY = int(os.getenv("LLM_CONCURRENCY", "6"))
 # Requests per minute per model, by provider (free-tier defaults; raise when on paid tiers)
 PROVIDER_RPM = {"gemini": int(os.getenv("GEMINI_RPM", "5")), "groq": int(os.getenv("GROQ_RPM", "25")),
@@ -38,6 +38,7 @@ TRANSCRIPTS_ENABLED = os.getenv("TRANSCRIPTS_ENABLED", "1") == "1"
 # Pipeline sizes (see assessment §7)
 N_QUERIES = int(os.getenv("N_QUERIES", "6"))            # topic/content YouTube searches (main discovery path)
 N_CREATOR_QUERIES = int(os.getenv("N_CREATOR_QUERIES", "2"))  # direct "top creator" searches (secondary path)
+PLANNED_CONTENT_QUERIES = 6   # the search plan always proposes this many; N_QUERIES decides how many actually run
 SEARCH_RESULTS_PER_QUERY = int(os.getenv("SEARCH_RESULTS_PER_QUERY", "50"))
 MIN_SUBSCRIBERS = 2_000
 MAX_SUBSCRIBERS = 3_000_000
@@ -62,7 +63,7 @@ ASSUMED_CPM_EUR = 20.0      # ASSUMED CPM for the cost proxy. Not a creator quot
 # Web discovery: ChatGPT web search (OpenAI Responses API, web_search tool) by default, Tavily as alternative/fallback.
 WEB_DISCOVERY_ENABLED = os.getenv("WEB_DISCOVERY_ENABLED", "1") == "1"
 WEB_SEARCH_PROVIDER = os.getenv("WEB_SEARCH_PROVIDER", "azure")    # "azure" | "openai" | "tavily"
-WEB_SEARCH_MODEL = os.getenv("WEB_SEARCH_MODEL", "gpt-5.6-sol")    # OpenAI path; Azure uses AZURE_OPENAI_DEPLOYMENT
+WEB_SEARCH_MODEL = os.getenv("WEB_SEARCH_MODEL", "gpt-5.4-mini")    # OpenAI path; Azure uses AZURE_OPENAI_DEPLOYMENT
 OPENAI_SEARCH_CALLS = 3        # YouTube / TikTok+Instagram / Twitch focus, one search-enabled call each
 OPENAI_SEARCH_CREATORS = 15    # nominations requested per call
 # Tavily: basic search = 1 credit; dev tier ~1,000 credits/month.

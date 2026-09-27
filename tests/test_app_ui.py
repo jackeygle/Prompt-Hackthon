@@ -543,3 +543,21 @@ def test_every_new_page_has_a_way_back(db_copy):
         assert keys(at, back), nav
         click(at, back)
         assert at.session_state["view"] == "campaign"
+
+
+def test_incomplete_search_strategy_is_shown_not_silent(db_copy, monkeypatch):
+    import pipeline
+    from models import CampaignSpec
+    A = campaigns_with_results(db_copy)[0]
+    spec = CampaignSpec.model_validate_json(sqlite3.connect(db_copy).execute(
+        "SELECT spec_json FROM campaigns WHERE id=?", (A,)).fetchone()[0])
+    broken = spec.model_copy(update={"search_queries": ["Patch 26.18 Tier List"], "n_creators": 10,
+                                     "strategy_notes": ["Search planning failed (bad format)."]})
+    monkeypatch.setattr(pipeline, "parse_brief", lambda llm, brief: broken)
+    at = start(db_copy)
+    click(at, "btn_new_search")
+    at.text_area(key="campaign_brief_v2").set_value("League of Legends").run()
+    at.button(key="FormSubmitter:brief_form-Continue →").click().run()
+    assert at.warning and "The search strategy is incomplete." in at.warning[0].value
+    assert "Search planning failed (bad format)." in at.warning[0].value
+    assert at.expander[0].label == "Search setup"  # opened, so the single fallback search is visible

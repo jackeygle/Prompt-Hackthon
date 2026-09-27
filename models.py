@@ -1,16 +1,30 @@
 """Pydantic models: domain objects and the JSON contracts for every LLM extraction."""
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 # ---------- Campaign ----------
+TOPIC_KINDS = {"game", "hardware", "product", "technology", "community", "event", "question", "topic"}
+TOPIC_ALIASES = {"creator": "topic", "streamer": "topic", "channel": "topic", "person": "topic",
+                 "tournament": "event", "league": "event", "esports": "event", "team": "community",
+                 "gpu": "hardware", "cpu": "hardware", "software": "technology"}
+
+
 class CurrentTopic(BaseModel):
     """A concrete, currently relevant thing the target audience follows (found via web search when available)."""
     name: str = Field(description="Specific name as people search for it, e.g. an actual game title, product "
                                   "model, event, community or recurring question; never a generic category")
     kind: Literal["game", "hardware", "product", "technology", "community", "event", "question", "topic"]
     why: str = Field(default="", description="<= 15 words: why this audience cares about it right now")
+
+    @field_validator("kind", mode="before")
+    @classmethod
+    def _known_kind(cls, v):
+        """Models sometimes invent kinds ('creator', 'patch', 'tournament', …). One odd label must not discard the
+        whole research, so anything outside the list becomes a plain 'topic'."""
+        v = str(v or "").strip().lower()
+        return v if v in TOPIC_KINDS else TOPIC_ALIASES.get(v, "topic")
 
 
 class ResearchQueries(BaseModel):
@@ -22,14 +36,20 @@ class ResearchQueries(BaseModel):
 class TopicResearch(BaseModel):
     topics: list[CurrentTopic]
 
+    @field_validator("topics", mode="before")
+    @classmethod
+    def _drop_unnamed(cls, v):
+        return [t for t in (v or []) if not isinstance(t, dict) or str(t.get("name") or "").strip()]
+
 
 class SearchPlan(BaseModel):
     """Audience -> current topic -> content -> creator. Content searches dominate; creator/list searches are secondary."""
-    content_queries: list[str] = Field(description=(
+    content_queries: list[str] = Field(default_factory=list, description=(
         "Searches a real viewer from the target audience would type to find VIDEOS about the concrete current topics "
         "(the channels behind those videos are the creators we want)"))
-    creator_queries: list[str] = Field(description="A few direct creator searches (best / top creators, lists)")
-    web_queries: list[str] = Field(description=(
+    creator_queries: list[str] = Field(default_factory=list,
+                                       description="A few direct creator searches (best / top creators, lists)")
+    web_queries: list[str] = Field(default_factory=list, description=(
         "Web searches to find creators and their profiles on other platforms: mostly topic-driven, one or two "
         "editorial creator lists, plus one each starting with 'site:tiktok.com', 'site:instagram.com', 'site:twitch.tv'"))
 
@@ -73,6 +93,7 @@ class CampaignSpec(CampaignSpecDraft):
     creator_queries: list[str] = Field(default_factory=list)       # secondary, direct "top creator" YouTube searches
     current_topics: list[CurrentTopic] = Field(default_factory=list)  # what the audience follows now (search strategy)
     topics_source: str = ""         # "web search" | "model knowledge" (no web provider or it failed)
+    strategy_notes: list[str] = Field(default_factory=list)  # what went wrong while researching / planning (shown)
     field_sources: dict[str, str] = Field(default_factory=dict)
 
 

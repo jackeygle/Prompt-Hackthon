@@ -56,7 +56,14 @@ Spread the content_queries over the audience's whole attention, not only the pro
 gaming PCs that includes gaming, tech and hardware creators broadly, not only PC-building channels.
 If the campaign is not about gaming or tech, follow its own topic and never add gaming or tech terms.
 creator_queries are the secondary path: direct "best / top creators" searches for this audience in this market.
+Every query must be unambiguous on its own: include the game / product / topic name whenever the phrase alone could
+match something else (e.g. "League of Legends ranked tips", not "ranked tips").
 Keep every query short (2-6 words). Do not just append the country name to generic phrases."""
+
+
+def planned_content() -> int:
+    """The plan always proposes a full set (shown and editable); N_QUERIES only limits how many run."""
+    return max(config.PLANNED_CONTENT_QUERIES, config.N_QUERIES)
 
 
 def plan_searches(llm: LLMClient, spec: CampaignSpec) -> SearchPlan:
@@ -67,9 +74,9 @@ def plan_searches(llm: LLMClient, spec: CampaignSpec) -> SearchPlan:
         f"Product: {spec.product}\nNiche: {spec.niche}\nTarget audience: {spec.audience}\n"
         f"Audience interests: {', '.join(spec.audience_interests)}\n"
         f"Market: {spec.target_country}; language: {spec.target_language}\n\nCONCRETE CURRENT TOPICS\n{topics}\n\n"
-        f"Write {config.N_QUERIES} content_queries, {config.N_CREATOR_QUERIES} creator_queries and 6 web_queries."))
+        f"Write {planned_content()} content_queries, {config.N_CREATOR_QUERIES} creator_queries and 6 web_queries."))
     clean = lambda qs, n: list(dict.fromkeys(q.strip() for q in qs if q and q.strip()))[:n]
-    return SearchPlan(content_queries=clean(plan.content_queries, config.N_QUERIES),
+    return SearchPlan(content_queries=clean(plan.content_queries, planned_content()),
                       creator_queries=clean(plan.creator_queries, config.N_CREATOR_QUERIES),
                       web_queries=clean(plan.web_queries, 6))
 
@@ -77,6 +84,11 @@ def plan_searches(llm: LLMClient, spec: CampaignSpec) -> SearchPlan:
 def n_creator_searches(n_content: int) -> int:
     """Direct creator searches stay the minority: at most half the topic/content searches."""
     return min(config.N_CREATOR_QUERIES, n_content // 2)
+
+
+def _short(e) -> str:
+    """First line of an error, trimmed: enough to tell quota / format / network problems apart."""
+    return " ".join(str(e).split())[:140]
 
 
 def discovery_queries(spec: CampaignSpec) -> list[str]:
@@ -106,21 +118,39 @@ def parse_brief(llm: LLMClient, brief: str) -> CampaignSpec:
     # Campaign priority is a business decision the user makes on the settings page: start Balanced, never guessed
     data["goal"], sources["goal"] = "balanced", "default"
     spec = CampaignSpec(**data, n_creators=config.DEFAULT_N_CREATORS, field_sources=sources)
-    # Current web information first, then the search strategy built on it. Both are optional: without them the
-    # brief's own queries stay (the UI says the strategy came from model knowledge).
+    # Current web information first, then the search strategy built on it. Both may fail; every fallback is
+    # recorded in spec.strategy_notes and shown on the settings page (never a silent, shorter plan).
+    notes: list[str] = []
     if config.WEB_DISCOVERY_ENABLED:
         spec.current_topics, err = web.research_current_topics(spec, llm)
         if err:
             log.warning("topic research: %s", err)
+            notes.append(f"Current-topic research failed ({_short(err)}). Searches are based on model knowledge "
+                         "and may be out of date.")
     spec.topics_source = "web search" if spec.current_topics else "model knowledge"
+    want = planned_content()
     try:
         plan = plan_searches(llm, spec)
-        if plan.content_queries:
-            spec.search_queries, spec.creator_queries = plan.content_queries, plan.creator_queries
-            spec.web_queries = plan.web_queries or spec.web_queries
-            spec.field_sources["search_queries"] = spec.topics_source  # the spec holds its own copy of `sources`
-    except Exception as e:  # keep the brief's queries
+    except Exception as e:
         log.warning("search planning failed: %s", e)
+        plan = None
+        notes.append(f"Search planning failed ({_short(e)}). Showing fallback searches: review them below or go "
+                     "back and try again.")
+    if plan and plan.content_queries:
+        spec.search_queries, spec.creator_queries = plan.content_queries, plan.creator_queries
+        spec.web_queries = plan.web_queries or spec.web_queries
+        spec.field_sources["search_queries"] = spec.topics_source  # the spec holds its own copy of `sources`
+        if len(plan.content_queries) < want:
+            notes.append(f"Search planning returned only {len(plan.content_queries)} of {want} content searches.")
+    elif plan is not None:
+        notes.append("Search planning returned no content searches. Showing fallback searches: review them below "
+                     "or go back and try again.")
+    if not (plan and plan.content_queries):
+        spec.field_sources["search_queries"] = "fallback"
+        # top up the brief's own searches with the researched topics (concrete names, not generic phrases)
+        extra = [t.name for t in spec.current_topics]
+        spec.search_queries = list(dict.fromkeys([*spec.search_queries, *extra]))[:want]
+    spec.strategy_notes = notes
     if not spec.web_queries:
         spec.web_queries = web.default_web_queries(spec)
     return spec
