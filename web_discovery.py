@@ -157,8 +157,31 @@ def _response_text(data: dict) -> tuple[str, set[str]]:
 def _json_block(text: str) -> dict:
     start, end = text.find("{"), text.rfind("}")
     if start < 0 or end <= start:
-        raise WebDiscoveryError("ChatGPT web search returned no JSON")
-    return json.loads(text[start:end + 1])
+        raise WebDiscoveryError(f"web search returned no JSON: {' '.join(text.split())[:160]!r}")
+    try:
+        return json.loads(text[start:end + 1])
+    except json.JSONDecodeError as e:
+        raise WebDiscoveryError(f"web search returned invalid JSON ({e.msg})") from e
+
+
+REFORMAT_PROMPT = """Return ONLY the JSON the request below asks for, built solely from your previous answer.
+Do not add anything that is not in the previous answer; use an empty list if it contains nothing usable.
+
+REQUEST:
+{prompt}
+
+PREVIOUS ANSWER:
+{text}"""
+
+
+def _reformat_as_json(url: str, headers: dict, model: str, prompt: str, text: str) -> dict:
+    """The search model sometimes answers in prose. One extra call WITHOUT web search turns that same answer into
+    the requested JSON (nothing new is looked up; sources stay those of the original search)."""
+    r = requests.post(url, timeout=120, headers=headers,
+                      json={"model": model, "input": REFORMAT_PROMPT.format(prompt=prompt, text=text[:6000])})
+    if r.status_code != 200:
+        raise WebDiscoveryError(f"reformatting the web search answer failed: HTTP {r.status_code}")
+    return _json_block(_response_text(r.json())[0])
 
 
 def _url_key(u: str | None) -> str:
@@ -198,7 +221,11 @@ def openai_web_search(prompt: str, via: str = "azure") -> tuple[dict, set[str]]:
         OpenAISearchUsage.calls += 1
         if r.status_code == 200:
             text, cited = _response_text(r.json())
-            data = _json_block(text)
+            try:
+                data = _json_block(text)
+            except WebDiscoveryError as e:
+                log.warning("%s web search answered without valid JSON, reformatting: %s", via, e)
+                data = _reformat_as_json(url, headers, model, prompt, text)
             db.cache_put(key, {"data": data, "cited": sorted(cited)})
             return data, cited
         last = f"{via} web search ({model}) HTTP {r.status_code}: {r.text[:200]}"

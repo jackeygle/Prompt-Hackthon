@@ -103,3 +103,34 @@ def test_provider_falls_back_to_available_key(monkeypatch):
     assert web.provider() == "tavily"
     monkeypatch.setattr(web.config, "TAVILY_API_KEY", "")
     assert web.provider() is None
+
+
+def test_prose_answer_is_reformatted_without_a_new_search(monkeypatch):
+    """gpt-5.6-sol sometimes answers the web search in prose; one tool-free call turns it into the requested JSON."""
+    import db as dbm
+    monkeypatch.setattr(dbm, "cache_get", lambda k: None)
+    monkeypatch.setattr(dbm, "cache_put", lambda k, v: None)
+    monkeypatch.setattr(web.config, "AZURE_OPENAI_API_KEY", "k")
+    monkeypatch.setattr(web.config, "AZURE_OPENAI_ENDPOINT", "https://x.services.ai.azure.com/openai/v1/responses")
+    bodies = []
+
+    class R:
+        status_code = 200
+
+        def __init__(self, text, sources=()):
+            self._d = {"output": [{"type": "web_search_call", "action": {"sources": [{"url": u} for u in sources]}},
+                                  {"type": "message", "content": [{"type": "output_text", "text": text,
+                                                                   "annotations": []}]}]}
+
+        def json(self):
+            return self._d
+
+    def post(url, timeout, headers, json):
+        bodies.append(json)
+        return (R("I found PC Max on YouTube.", ["https://www.youtube.com/@pcmax"]) if len(bodies) == 1
+                else R('{"creators": [{"name": "PC Max"}]}'))
+    monkeypatch.setattr(web.requests, "post", post)
+    data, cited = web.openai_web_search("find creators, answer JSON")
+    assert data == {"creators": [{"name": "PC Max"}]}
+    assert "tools" not in bodies[1]                       # the reformat step does not search again
+    assert cited == {"https://www.youtube.com/@pcmax"}    # evidence is the original search's
