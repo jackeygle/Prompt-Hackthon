@@ -1,6 +1,6 @@
-"""Web / cross-platform creator discovery: ChatGPT web search (default) or Tavily.
+"""Web / cross-platform creator discovery: model web search (Azure gpt-5.6-sol by default, or OpenAI) or Tavily.
 
-ChatGPT (OpenAI Responses API + web_search tool) -> nominated creators, each with a profile URL or a cited source;
+Model web search (Responses API + web_search tool) -> nominated creators, each with a profile URL or a cited source;
                 nominations without either are dropped (the model only nominates, it never supplies metrics)
 Tavily results  ->  creator identities (deterministic URL parsing + one LLM call for names in articles)
                 ->  resolved to YouTube channels where possible (YouTube stays the metrics source)
@@ -21,7 +21,7 @@ import db
 import youtube as yt
 from collectors import SOCIAL_PATTERNS, _IGNORE
 from llm import LLMClient
-from models import CampaignSpec, WebCreatorMentions, WebSearchCreators
+from models import CampaignSpec, CurrentTopic, ResearchQueries, TopicResearch, WebCreatorMentions, WebSearchCreators
 
 log = logging.getLogger(__name__)
 
@@ -35,14 +35,27 @@ class TavilyUsage:
 
 
 class OpenAISearchUsage:
-    calls = 0  # real (non-cached) Responses API calls with the web_search tool
+    calls = 0  # real (non-cached) Responses API calls with the web_search tool (Azure or OpenAI)
+
+
+MODEL_SEARCH = ("azure", "openai")  # providers that search through a model (Responses API + web_search tool)
+
+
+def available_providers() -> list[str]:
+    """Web-search providers with credentials, configured one first (Azure gpt-5.6-sol by default)."""
+    have = {"azure": bool(config.AZURE_OPENAI_API_KEY and config.AZURE_OPENAI_ENDPOINT),
+            "openai": bool(config.OPENAI_API_KEY), "tavily": bool(config.TAVILY_API_KEY)}
+    first = config.WEB_SEARCH_PROVIDER if config.WEB_SEARCH_PROVIDER in have else "azure"
+    return [p for p in dict.fromkeys((first, *have)) if have[p]]
 
 
 def provider() -> str | None:
-    """Configured web-search provider, falling back to the other one when its key is missing."""
-    have = {"openai": bool(config.OPENAI_API_KEY), "tavily": bool(config.TAVILY_API_KEY)}
-    first = config.WEB_SEARCH_PROVIDER if config.WEB_SEARCH_PROVIDER in have else "openai"
-    return next((p for p in (first, *have) if have[p]), None)
+    """Configured web-search provider, falling back to the next one with credentials."""
+    return next(iter(available_providers()), None)
+
+
+def search_model(via: str) -> str:
+    return (config.AZURE_OPENAI_DEPLOYMENT or config.WEB_SEARCH_MODEL) if via == "azure" else config.WEB_SEARCH_MODEL
 
 
 def default_web_queries(spec: CampaignSpec) -> list[str]:
@@ -103,15 +116,19 @@ companies. Use only information present in the results. Do not rank or judge the
 
 
 # ------------------------------------------------------------------ ChatGPT web search
-SEARCH_FOCUS = [("YouTube", "YouTube channels (lists of the best creators, recommendations, rankings)"),
+SEARCH_FOCUS = [("YouTube", "YouTube channels behind recent, well-watched videos about the current topics below; "
+                            "editorial 'best creators' lists only as a secondary source"),
                 ("TikTok and Instagram", "TikTok and Instagram creators"),
                 ("Twitch", "Twitch streamers")]
 SEARCH_PROMPT = """Use web search to find individual content creators for an influencer campaign.
 Product: {product}
 Target audience: {audience}
 Audience interests: {interests}
-Market: {country}; the creators should publish in language '{lang}'.
+Current topics this audience follows: {topics}
+Market: {country}; the creators should publish in language '{lang}', or clearly reach that market.
 Focus: {focus}.
+Prefer creators who already have this audience's attention through what they publish (content about these topics),
+not only creators who call themselves influencers or appear on "top creator" lists.
 
 Find up to {n} real individual creators (not brands, shops, magazines or agencies) whose audience matches.
 Only include creators you actually found in search results. Never invent names, handles or URLs; if you do not
@@ -144,52 +161,65 @@ def _url_key(u: str | None) -> str:
     return re.sub(r"^https?://(www\.)?|[?#].*$|/+$", "", (u or "").strip().lower())
 
 
-def openai_web_search(prompt: str) -> tuple[dict, set[str]]:
-    """One Responses API call with the web_search tool (cached per day). Returns (parsed JSON, cited URLs)."""
+def _responses_endpoint(via: str) -> tuple[str, dict]:
+    if via == "azure":
+        if not (config.AZURE_OPENAI_API_KEY and config.AZURE_OPENAI_ENDPOINT):
+            raise WebDiscoveryError("environment variables AZURE_OPENAI_ENDPOINT / AZURE_OPENAI_API_KEY are not set")
+        ep = config.AZURE_OPENAI_ENDPOINT.rstrip("/")
+        ep = ep if ep.endswith("/responses") else (ep if ep.endswith("/openai/v1") else ep + "/openai/v1") + "/responses"
+        return ep, {"api-key": config.AZURE_OPENAI_API_KEY}
     if not config.OPENAI_API_KEY:
         raise WebDiscoveryError("environment variable OPENAI_API_KEY is not set")
+    return "https://api.openai.com/v1/responses", {"Authorization": f"Bearer {config.OPENAI_API_KEY}"}
+
+
+def openai_web_search(prompt: str, via: str = "azure") -> tuple[dict, set[str]]:
+    """One Responses API call with the web_search tool on Azure (gpt-5.6-sol) or OpenAI, cached per day.
+    Returns (parsed JSON, cited URLs)."""
+    url, headers = _responses_endpoint(via)
+    model = search_model(via)
     day = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    key = "oaws:" + hashlib.sha256(json.dumps([config.WEB_SEARCH_MODEL, prompt, day]).encode()).hexdigest()
+    key = "oaws:" + hashlib.sha256(json.dumps([via, model, prompt, day]).encode()).hexdigest()
     if (hit := db.cache_get(key)) is not None:
         return hit["data"], set(hit["cited"])
     last = ""
     for tool in ("web_search", "web_search_preview"):  # GA name first, older accounts/models use the preview name
         try:
-            r = requests.post("https://api.openai.com/v1/responses", timeout=120,
-                              headers={"Authorization": f"Bearer {config.OPENAI_API_KEY}"},
-                              json={"model": config.WEB_SEARCH_MODEL, "tools": [{"type": tool}], "input": prompt})
+            r = requests.post(url, timeout=180, headers=headers,
+                              json={"model": model, "tools": [{"type": tool}], "input": prompt})
         except requests.RequestException as e:
-            raise WebDiscoveryError(f"OpenAI unreachable: {e}") from e
+            raise WebDiscoveryError(f"{via} web search unreachable: {e}") from e
         OpenAISearchUsage.calls += 1
         if r.status_code == 200:
             text, cited = _response_text(r.json())
             data = _json_block(text)
             db.cache_put(key, {"data": data, "cited": sorted(cited)})
             return data, cited
-        last = f"OpenAI web search HTTP {r.status_code}: {r.text[:200]}"
+        last = f"{via} web search ({model}) HTTP {r.status_code}: {r.text[:200]}"
         if r.status_code != 400:
             break
     raise WebDiscoveryError(last)
 
 
-def discover_openai(spec: CampaignSpec, progress=None) -> tuple[list[dict], list[str]]:
-    """ChatGPT nominates creators. Kept only with a profile URL (parsed deterministically) or a source URL the model
+def discover_openai(spec: CampaignSpec, progress=None, via: str = "azure") -> tuple[list[dict], list[str]]:
+    """The search model (gpt-5.6-sol on Azure by default) nominates creators. Kept only with a profile URL (parsed deterministically) or a source URL the model
     actually cited; everything is verified later against the official YouTube / Twitch / Instagram APIs."""
     identities, errors = [], []
     country = {"DE": "Germany", "AT": "Austria", "CH": "Switzerland"}.get(spec.target_country, spec.target_country)
     for i, (label, focus) in enumerate(SEARCH_FOCUS[:config.OPENAI_SEARCH_CALLS]):
-        q = f"ChatGPT web search: {label} creators · {spec.niche} · {country}"
+        q = f"{search_model(via)} web search: {label} creators · {spec.niche} · {country}"
         if progress:
-            progress(f"Web search (ChatGPT): {label} creators", i / len(SEARCH_FOCUS))
+            progress(f"Web search ({search_model(via)}): {label} creators", i / len(SEARCH_FOCUS))
         prompt = SEARCH_PROMPT.format(product=spec.product, audience=spec.audience, country=country,
                                       interests=", ".join(spec.audience_interests) or spec.niche,
+                                      topics=", ".join(t.name for t in spec.current_topics) or "(not researched)",
                                       lang=spec.target_language, focus=focus, n=config.OPENAI_SEARCH_CREATORS)
         try:
-            data, cited = openai_web_search(prompt)
+            data, cited = openai_web_search(prompt, via=via)
             found = WebSearchCreators.model_validate(data).creators
         except Exception as e:
             errors.append(str(e)[:200])
-            log.warning("ChatGPT web search: %s", e)
+            log.warning("%s web search: %s", via, e)
             if "not set" in str(e) or "unreachable" in str(e) or "401" in str(e) or "429" in str(e):
                 break
             continue
@@ -210,16 +240,115 @@ def discover_openai(spec: CampaignSpec, progress=None) -> tuple[list[dict], list
     return identities, errors
 
 
+# ------------------------------------------------------------------ current-topic research (before search planning)
+COUNTRY_NAME = {"DE": "Germany", "AT": "Austria", "CH": "Switzerland", "FI": "Finland", "SE": "Sweden", "DK": "Denmark",
+                "NO": "Norway", "NL": "Netherlands", "FR": "France", "US": "United States", "GB": "United Kingdom"}
+
+AUDIENCE_LENS = """Think from the target audience's point of view: what do these people actually watch, play, use, compare
+and ask about right now? Resolve every abstract interest into concrete, current names that people type into a
+search bar (actual titles, product models, events, communities, recurring questions), not categories.
+If the campaign is about gaming, gaming PCs or consumer tech (the business of Prenew, a refurbished gaming-PC shop),
+think like a gamer who might realistically buy a gaming PC: the games they play and watch, competitive titles,
+performance / FPS and upgrade questions, current GPUs / CPUs and price-performance, setups. Their creators are
+gaming, tech and hardware creators broadly, not only PC builders.
+If the campaign is about another topic, follow that topic and never add gaming or tech entities to it.
+Relevance must hold in the campaign market ({country}, language '{lang}'): prefer what is big there; include
+global entities only where that audience genuinely follows them."""
+
+TOPIC_PROMPT = """Use web search to research what a campaign's target audience currently cares about ({today}).
+Product: {product}
+Target audience: {audience}
+Audience interests (abstract): {interests}
+Market: {country}; language '{lang}'.
+
+""" + AUDIENCE_LENS + """
+
+Return {n} concrete topics, each one you actually saw in current search results. Never invent.
+Answer with ONLY this JSON, no other text:
+{{"topics": [{{"name": "...", "kind": "game|hardware|product|technology|community|event|question|topic",
+"why": "<= 15 words"}}]}}"""
+
+TOPIC_SYSTEM = """You turn web search results into concrete, currently relevant topics for a campaign audience.
+Use only entities named in the results. """ + AUDIENCE_LENS
+
+
+RESEARCH_QUERY_SYSTEM = """You plan web searches that reveal what a campaign's target audience cares about RIGHT NOW,
+so abstract interests can be resolved into concrete current names. """ + AUDIENCE_LENS + """
+Cover the audience's whole attention, not only the product: e.g. what they play or watch most, current releases,
+current products they compare, current questions. Include the month and year where it helps freshness.
+Write the searches in the language that returns the best results for the market (English or local)."""
+
+
+def _topic_queries(spec: CampaignSpec, llm: LLMClient, lens: dict) -> list[str]:
+    """Tavily path: the LLM writes audience-side research searches (not generic interest + country)."""
+    month = datetime.now(timezone.utc).strftime("%B %Y")
+    fallback = [f"most popular {i} right now {lens['country']} {month}" for i in (spec.audience_interests or [spec.niche])[:3]]
+    try:
+        out = llm.extract(ResearchQueries, RESEARCH_QUERY_SYSTEM.format(**lens), (
+            f"Today: {month}\nProduct: {spec.product}\nTarget audience: {spec.audience}\n"
+            f"Audience interests: {', '.join(spec.audience_interests) or spec.niche}\nMarket: {lens['country']}\n"
+            "Write 4 searches."))
+        return [q.strip() for q in out.queries if q.strip()][:4] or fallback
+    except Exception as e:
+        log.warning("research query planning failed: %s", e)
+        return fallback
+
+
+def _research_with(which: str, spec: CampaignSpec, llm: LLMClient, n: int, lens: dict) -> list[CurrentTopic]:
+    if which in MODEL_SEARCH:
+        data, _ = openai_web_search(via=which, prompt=TOPIC_PROMPT.format(
+            today=datetime.now(timezone.utc).strftime("%B %Y"), product=spec.product, audience=spec.audience,
+            interests=", ".join(spec.audience_interests) or spec.niche, n=n, **lens))
+        return TopicResearch.model_validate(data).topics
+    results = [r for q in _topic_queries(spec, llm, lens) for r in tavily_search(q, 6)]
+    if not results:
+        return []
+    listing = "\n\n".join(f"[{j}] {r['title']}\n{r['content']}" for j, r in enumerate(results[:24]))
+    out = llm.extract(TopicResearch, TOPIC_SYSTEM.format(**lens),
+                      f"Product: {spec.product}\nAudience: {spec.audience}\n"
+                      f"Interests: {', '.join(spec.audience_interests)}\n\nRESULTS:\n{listing}")
+    corpus = _norm(listing)
+    return [t for t in out.topics if _norm(t.name) in corpus]  # named in the results, not invented
+
+
+def research_current_topics(spec: CampaignSpec, llm: LLMClient, n: int = 14) -> tuple[list[CurrentTopic], str | None]:
+    """Resolve abstract audience interests into concrete current topics. Returns (topics, error). Empty topics mean
+    the caller plans searches from model knowledge only (and says so)."""
+    country = COUNTRY_NAME.get(spec.target_country, spec.target_country)
+    lens = dict(country=country, lang=spec.target_language)
+    order = available_providers()  # gpt-5.6-sol on Azure first; next provider when one fails (quota, outage, ...)
+    if not order:
+        return [], "no web search provider (AZURE_OPENAI_API_KEY, OPENAI_API_KEY or TAVILY_API_KEY)"
+    errors, topics = [], []
+    for which in order:
+        try:
+            topics = _research_with(which, spec, llm, n, lens)
+        except Exception as e:
+            log.warning("topic research (%s) failed: %s", which, e)
+            errors.append(f"{which}: {str(e)[:160]}")
+            continue
+        if topics:
+            break
+    if not topics:
+        return [], "; ".join(errors) or "web search found no current topics"
+    seen, uniq = set(), []
+    for t in topics:
+        if t.name.strip() and _norm(t.name) not in seen:
+            seen.add(_norm(t.name))
+            uniq.append(t)
+    return uniq[:n], None
+
+
 def discover(spec: CampaignSpec, llm: LLMClient, progress=None) -> tuple[list[dict], list[str]]:
-    """Returns (identities, errors) from the configured provider (ChatGPT by default, Tavily as fallback)."""
+    """Returns (identities, errors): model web search (Azure gpt-5.6-sol by default), Tavily as fallback."""
     which = provider()
     if which is None:
-        return [], ["no web search provider: set OPENAI_API_KEY (ChatGPT) or TAVILY_API_KEY"]
-    if which == "openai":
-        identities, errors = discover_openai(spec, progress)
+        return [], ["no web search provider: set AZURE_OPENAI_API_KEY, OPENAI_API_KEY or TAVILY_API_KEY"]
+    if which in MODEL_SEARCH:
+        identities, errors = discover_openai(spec, progress, via=which)
         if identities or not config.TAVILY_API_KEY:
             return identities, errors
-        log.warning("ChatGPT web search found nothing, falling back to Tavily")
+        log.warning("%s web search found nothing, falling back to Tavily", which)
         more, errs = discover_tavily(spec, llm, progress)
         return more, errors + errs
     return discover_tavily(spec, llm, progress)

@@ -182,7 +182,8 @@ def discover(spec, extra_logins: list[str] | None = None, progress=None) -> tupl
         if progress:
             progress("Twitch: finding relevant categories", 0.0)
         cats: dict[str, str] = {}
-        for q in [SCIENCE_TECH, *spec.audience_interests[:6]]:
+        games = [t.name for t in getattr(spec, "current_topics", []) if t.kind == "game"][:6]  # researched, current
+        for q in [SCIENCE_TECH, *games, *spec.audience_interests[:6]]:
             for c in search_categories(q, 1 if q == SCIENCE_TECH else 2):
                 cats.setdefault(c["id"], c["name"])
         for g in top_games(config.TWITCH_TOP_GAMES):

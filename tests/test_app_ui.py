@@ -243,7 +243,7 @@ def test_ranking_goal_survives_analysis_round_trip(db_copy):
     at = open_campaign(start(db_copy), cid)
     default = at.session_state[f"preset_{cid}"]
     other = next(g for g in ("conversion", "awareness", "balanced") if g != default)
-    at.segmented_control(key=f"_w_preset_{cid}").set_value(other).run()
+    at.radio(key=f"_w_preset_{cid}").set_value(other).run()
     ranked = _scores(at)
     click(at, keys(at, "view_")[0])
     click(at, "sl_detail")  # any interaction on the analysis page reruns without the ranking widgets
@@ -259,7 +259,7 @@ def test_ranking_goal_is_per_campaign(db_copy):
     at = open_campaign(start(db_copy), first)
     spec_goal = at.session_state[f"preset_{first}"]
     other = next(g for g in ("conversion", "awareness", "balanced") if g != spec_goal)
-    at.segmented_control(key=f"_w_preset_{first}").set_value(other).run()
+    at.radio(key=f"_w_preset_{first}").set_value(other).run()
     open_campaign(at, rest[0])
     goal = json.loads(sqlite3.connect(db_copy).execute(
         "SELECT spec_json FROM campaigns WHERE id=?", (rest[0],)).fetchone()[0])["goal"]
@@ -277,11 +277,18 @@ def test_filters_survive_analysis_round_trip(db_copy):
     assert at.segmented_control(key=f"_w_f_conf_{cid}").value == "Medium+"
 
 
-def test_ranking_goal_cannot_be_deselected(db_copy):
+def test_priority_is_human_and_changes_ranking(db_copy):
     cid = campaigns_with_results(db_copy)[0]
     at = open_campaign(start(db_copy), cid)
-    at.segmented_control(key=f"_w_preset_{cid}").set_value(None).run()  # clicking the active option again
-    assert not at.exception, [e.value for e in at.exception]
+    radio = at.radio(key=f"_w_preset_{cid}")
+    assert list(radio.options) == ["Drive sales", "Reach more gamers", "Balanced"]  # labels, not AHP preset ids
+    assert "AHP" not in radio.label + (radio.help or "")
+    scores = {}
+    for p in ("conversion", "awareness", "balanced"):
+        at.radio(key=f"_w_preset_{cid}").set_value(p).run()
+        assert not at.exception
+        scores[p] = _scores(at)
+    assert scores["conversion"] != scores["awareness"], "priority must change the ranking, not just a label"
 
 
 # ------------------------------------------------------------------ campaign creation (LLM + YouTube stubbed)
@@ -292,7 +299,7 @@ def test_create_campaign_flow_passes_budget(db_copy, monkeypatch):
     spec = CampaignSpec.model_validate_json(sqlite3.connect(db_copy).execute(
         "SELECT spec_json FROM campaigns WHERE id=?", (existing,)).fetchone()[0])
     seen = {}
-    monkeypatch.setattr(pipeline, "parse_brief", lambda llm, brief: spec.model_copy(update={"budget_per_video": 0}))
+    monkeypatch.setattr(pipeline, "parse_brief", lambda llm, brief: spec.model_copy(update={"budget_per_video": 0, "n_creators": 10}))
 
     def fake_run(brief, spec=None, seed_handles=(), progress=None):
         seen["spec"] = spec
@@ -305,7 +312,12 @@ def test_create_campaign_flow_passes_budget(db_copy, monkeypatch):
     assert not at.exception, [e.value for e in at.exception]
     n = at.session_state["draft_n"]
     at.number_input(key=f"s{n}_budget").set_value(2500).run()
+    slider = at.slider(key=f"s{n}_n_creators")
+    assert (slider.min, slider.max, slider.value) == (1, 50, 10)
+    slider.set_value(23).run()
+    at.radio(key=f"s{n}_goal").set_value("conversion").run()
     at.button(key="FormSubmitter:settings_form-Create campaign →").click().run()
     assert not at.exception, [e.value for e in at.exception]
     assert seen["spec"].budget_per_video == 2500
+    assert seen["spec"].n_creators == 23 and seen["spec"].goal == "conversion"  # reach the pipeline, not only the UI
     assert at.session_state["view"] == "discover" and at.session_state["campaign"] == existing

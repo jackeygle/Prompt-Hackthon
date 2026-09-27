@@ -17,6 +17,7 @@ import db
 import pipeline
 import ranking
 import ui
+import web_discovery as web
 from llm import LLMClient, missing_keys
 from models import CampaignSpec
 from ui import T, esc, html
@@ -37,6 +38,15 @@ COUNTRY = {"DE": "Germany", "AT": "Austria", "CH": "Switzerland", "FR": "France"
            "GB": "United Kingdom", "UK": "United Kingdom", "ES": "Spain", "IT": "Italy", "PL": "Poland"}
 LANG = {"de": "German", "en": "English", "fr": "French", "nl": "Dutch", "sv": "Swedish", "fi": "Finnish",
         "da": "Danish", "no": "Norwegian", "es": "Spanish", "it": "Italian", "pl": "Polish"}
+# Campaign priority = the existing AHP presets, named as the business decision they encode
+PRIORITY = {"conversion": ("Drive sales", "Find creators whose audience is likely to buy."),
+            "awareness": ("Reach more gamers", "Prioritize reach, views and brand exposure."),
+            "balanced": ("Balanced", "Balance sales potential and reach.")}
+PRIORITY_HELP = "What matters most for this campaign? Changes how the creators are ranked, never who is found."
+BUDGET_LABEL = "Budget per creator video (€)"
+BUDGET_HELP = ("Maximum you expect to spend on one creator video (0 = no limit). Creators whose estimated cost "
+               f"(median views × assumed €{config.ASSUMED_CPM_EUR:.0f} CPM) is above it are marked Over budget, "
+               "listed last and left out of the top picks. It does not change the score or the search.")
 GROUP_LABEL = {"Campaign Fit": "Campaign fit", "Content Credibility": "Product evidence",
                "Audience Quality": "Community", "Reach & Performance": "Performance", "Cost & Risk": "Cost & risk"}
 # Card bars are ABSOLUTE 0-100 values (comparable across campaigns and not stretched by a small candidate set);
@@ -178,7 +188,8 @@ def build_context(campaign: dict) -> dict:
     run_stats = next((json.loads(r["stats_json"]) for r in
                       db.query("SELECT stats_json FROM run_stats WHERE campaign_id=?", (cid_c,))), None)
     gw = group_weights(spec, cid_c)
-    weights = ranking.criterion_weights(gw)
+    preset = preset_of(spec, cid_c)
+    weights = ranking.criterion_weights(gw, preset=preset)
     passed = {c: ranking.hard_filter(f) for c, f in feats.items()}
     ok_ids = [c for c, (p, _) in passed.items() if p]
     df = pd.DataFrame({c: feats[c] for c in ok_ids}).T.reindex(columns=[c.name for c in ranking.CRITERIA])
@@ -259,20 +270,21 @@ def build_context(campaign: dict) -> dict:
         for v in vms.values():
             vs = sorted((by_id[i] for i in v.get("videos") or [] if i in by_id), key=lambda r: r["published_at"] or "")
             v["video_views"] = [r["views"] for r in vs]
-    platforms = {pl: build_platform(pl, cid_c, gw, stored, creators, lang) for pl in ("twitch", "instagram")}
+    platforms = {pl: build_platform(pl, cid_c, gw, stored, creators, lang, preset) for pl in ("twitch", "instagram")}
     return {"campaign": campaign, "spec": spec, "feats": feats, "res": res, "weights": weights, "used": used,
             "group_w": gw, "passed": passed, "vms": vms, "creators": creators, "discoveries": discoveries,
             "run_stats": run_stats, "lang": lang, "budget": budget, "platforms": platforms}
 
 
-def build_platform(platform: str, cid_c: str, gw: dict, stored: dict, creators: dict, lang: str) -> dict:
+def build_platform(platform: str, cid_c: str, gw: dict, stored: dict, creators: dict, lang: str,
+                   preset: str | None = None) -> dict:
     """Separate Twitch / Instagram ranking, re-computed live with the same group weights as YouTube."""
     crits = ranking.PLATFORM_CRITERIA[platform]
     feats = pipeline.load_features(cid_c, platform + ":")
     passed = {c: ranking.platform_hard_filter(platform, f) for c, f in feats.items()}
     ok = [c for c, (p, _) in passed.items() if p]
     df = pd.DataFrame({c: feats[c] for c in ok}).T.reindex(columns=[c.name for c in crits])
-    weights = ranking.criterion_weights(gw, crits)
+    weights = ranking.criterion_weights(gw, crits, preset)
     res = ranking.topsis(df, weights, crits) if ok else pd.DataFrame(columns=["score", "rank"])
     used = res.attrs.get("weights", {})
     acc = {r["id"]: r for r in db.query("SELECT * FROM platform_accounts WHERE platform=?", (platform,))}
@@ -403,7 +415,8 @@ def _submit_settings() -> None:
         product=g("product"), niche=g("niche"), price_segment=g("price_segment"),
         target_country=g("country").strip().upper(), target_language=g("lang").strip().lower(), goal=g("goal"),
         audience=g("audience"), audience_interests=commas("interests"), product_keywords=commas("keywords"),
-        search_queries=lines("yt_q"), web_queries=lines("web_q"), min_subscribers=int(g("min_subscribers")),
+        search_queries=lines("yt_q"), creator_queries=lines("cr_q"), web_queries=lines("web_q"),
+        current_topics=draft.current_topics, topics_source=draft.topics_source, min_subscribers=int(g("min_subscribers")),
         max_subscribers=int(g("max_subscribers")), n_creators=int(g("n_creators")),
         budget_per_video=int(g("budget") or 0), field_sources=sources)
     ss.run_request = (spec, ss.get("draft_brief", DEFAULT_BRIEF), commas("seeds"))
@@ -411,7 +424,7 @@ def _submit_settings() -> None:
 
 def cost_estimate(n: int) -> str:
     screen = min(max(config.N_AFTER_CHEAP_FILTER, 2 * n), config.MAX_SCREENED)
-    yt = 600 + 2 * screen + 5 * n
+    yt = 100 * (config.N_QUERIES + pipeline.n_creator_searches(config.N_QUERIES)) + 2 * screen + 5 * n
     ai = 2 + screen + 6 * n
     return f"≈ {yt:,} YouTube units (of 10,000/day), {ai} AI calls"
 
@@ -422,7 +435,7 @@ def campaign_page(campaigns: list[dict]) -> None:
     # parse first, so the page below already reflects the result (settings on success, the brief box on failure)
     parse_error = None
     if parse:
-        with st.spinner("Reading the brief…"):
+        with st.spinner("Reading the brief and researching what this audience follows right now (about a minute)…"):
             try:
                 ss.draft = pipeline.parse_brief(LLMClient(config.LLM_MODELS), parse)
                 ss.draft_brief = parse
@@ -510,30 +523,41 @@ def campaign_form(draft: CampaignSpec) -> None:
         st.text_input("Target audience", draft.audience, key=k + "audience")
         st.text_input("Audience interests (what they watch)" + tag("audience_interests"),
                       ", ".join(draft.audience_interests), key=k + "interests")
-        a, b, c, d = st.columns(4)
-        goals = ["conversion", "awareness", "balanced"]
-        a.selectbox("Goal", goals, index=goals.index(draft.goal), key=k + "goal", format_func=str.capitalize)
+        st.radio("Campaign priority", list(PRIORITY), index=list(PRIORITY).index(draft.goal), key=k + "goal",
+                 format_func=lambda p: PRIORITY[p][0], captions=[PRIORITY[p][1] for p in PRIORITY],
+                 horizontal=True, help=PRIORITY_HELP)
+        b, c, d = st.columns(3)
         b.number_input("Min subscribers" + tag("min_subscribers"), 0, 100_000_000, draft.min_subscribers,
                        step=1000, key=k + "min_subscribers")
         c.number_input("Max subscribers" + tag("max_subscribers"), 0, 100_000_000, draft.max_subscribers,
                        step=100_000, key=k + "max_subscribers")
-        d.number_input("Budget per video (€)", 0, 10_000_000, draft.budget_per_video, step=500, key=k + "budget",
-                       help="0 = no limit. Creators above it are flagged, not removed.")
-        opts = config.N_CREATOR_OPTIONS
-        st.segmented_control("Creators to analyse", opts, default=draft.n_creators if draft.n_creators in opts
-                             else config.DEFAULT_N_CREATORS, key=k + "n_creators", required=True)
+        d.number_input(BUDGET_LABEL, 0, 10_000_000, draft.budget_per_video, step=500, key=k + "budget",
+                       help=BUDGET_HELP)
+        st.slider("Creators to analyze", 1, config.MAX_N_CREATORS, min(max(draft.n_creators, 1), config.MAX_N_CREATORS),
+                  step=1, key=k + "n_creators", help="How many creators are analysed in depth (videos, comments, "
+                  "evidence). More creators take longer and use more API quota.")
         html(f'<div class="pn-subtle" style="margin:-6px 0 8px">10 creators {esc(cost_estimate(10))} · '
              f'50 creators {esc(cost_estimate(50))}</div>')
         with st.expander("Search setup"):
             st.text_input("Niche", draft.niche, key=k + "niche")
             st.text_input("Product keywords", ", ".join(draft.product_keywords), key=k + "keywords")
-            st.text_area("YouTube searches (one per line)", "\n".join(draft.search_queries), height=130,
-                         key=k + "yt_q")
+            if draft.current_topics:
+                html('<div class="pn-subtle" style="margin-bottom:6px">What this audience follows now '
+                     f'({esc(draft.topics_source)}): '
+                     + esc(" · ".join(t.name for t in draft.current_topics)) + "</div>")
+            else:
+                html('<div class="pn-subtle" style="margin-bottom:6px">No current-topic research (no web search '
+                     'available); searches are based on model knowledge.</div>')
+            st.text_area("Topic & content searches, YouTube (one per line)", "\n".join(draft.search_queries),
+                         height=130, key=k + "yt_q", help="Main path: videos about what the audience follows now; "
+                         "the channels behind them become candidates.")
+            st.text_area("Direct creator searches, YouTube (one per line)", "\n".join(draft.creator_queries),
+                         height=70, key=k + "cr_q", help="Secondary path: 'best / top creators' style searches.")
             st.text_area("Web & social searches (one per line)", "\n".join(draft.web_queries), height=130,
                          key=k + "web_q")
             st.text_input("Must-include channels (@handles, comma-separated)", "", key=k + "seeds")
         missing = sorted(set(missing_keys(config.LLM_MODELS) + missing_keys(config.VLM_MODELS)
-                             + ([] if config.TAVILY_API_KEY else ["TAVILY_API_KEY"])
+                             + ([] if web.provider() else ["AZURE_OPENAI_API_KEY, OPENAI_API_KEY or TAVILY_API_KEY"])
                              + ([] if config.YOUTUBE_API_KEY else ["YOUTUBE_API_KEY"])))
         if missing:
             html(f'<div class="pn-note">Missing keys (skipped): {esc(", ".join(missing))}</div>')
@@ -579,7 +603,7 @@ def recent_campaigns(campaigns: list[dict], n_cols: int = 3, overlap: bool = Fal
             n = counts[c["id"]]
             brief = " ".join((c.get("brief") or "").split())
             brief = brief if len(brief) <= 90 else brief[:87] + "…"
-            specs = " · ".join(x for x in [spec.target_country, spec.price_segment, spec.goal.capitalize()] if x)
+            specs = " · ".join(x for x in [spec.target_country, spec.price_segment, PRIORITY[spec.goal][0]] if x)
             with st.container(key=f"row-camp-{ui.key(c['id'])}", horizontal=True, vertical_alignment="center",
                               gap="small"):
                 html(f'<div class="pn-row-main"><div class="nm">{esc(spec.product)}</div>'
@@ -622,7 +646,11 @@ def creator_card(vm: dict, ctx: dict, shortlisted: bool) -> None:
         loc = COUNTRY.get(vm["country"], vm["country"]) if vm["country"] else ""
         stats = "".join([
             ui.stat_tile("Subscribers", ui.fmt_count(vm["subs"])),
-            ui.stat_tile("Median views", ui.fmt_count(vm["median_views"])),
+            ui.stat_tile("Median views", ui.fmt_count(vm["median_views"]), hint="Median views of relevant videos"),
+            ui.stat_tile("Engagement", ui.pct1(vm["engagement"])),
+            ui.stat_tile("Relevant videos", "–" if vm["n_relevant"] is None else f"{vm['n_relevant']:.0f}",
+                         hint=f"{vm['n_analyzed'] or 0:.0f} analysed in depth"),
+            ui.stat_tile("Purchase intent", ui.pct(vm["purchase_intent"]), hint="Share of comments showing buying intent"),
             ui.stat_tile("Cost proxy", f"€{ui.fmt_count(vm['cost'])}" if vm["cost"] else "–",
                          hint=f"Per video: median views × assumed €{config.ASSUMED_CPM_EUR:.0f} CPM, not a quote"),
         ])
@@ -702,18 +730,15 @@ def compare_table(items: list[dict], ctx: dict, short: list[str]) -> None:
 
 
 def weights_controls(spec: CampaignSpec, campaign_id: str) -> None:
-    presets = list(ranking.AHP_PRESETS)
-    with st.popover("Ranking priorities", width="stretch"):
-        st.number_input("Budget per video (€, 0 = no limit)", 0, 10_000_000, step=500,
-                        **keep(f"budget_{campaign_id}", spec.budget_per_video),
-                        help="Creators whose cost proxy is above this are flagged and listed last. "
-                             "The campaign score does not change.")
-        st.segmented_control("Campaign goal", presets, format_func=str.capitalize, required=True,
-                             **keep(f"preset_{campaign_id}", spec.goal))
+    with st.popover("Priority & budget", width="stretch"):
+        st.radio("Campaign priority", list(PRIORITY), format_func=lambda p: PRIORITY[p][0],
+                 captions=[PRIORITY[p][1] for p in PRIORITY], help=PRIORITY_HELP,
+                 **keep(f"preset_{campaign_id}", spec.goal))
+        st.number_input(BUDGET_LABEL, 0, 10_000_000, step=500, help=BUDGET_HELP,
+                        **keep(f"budget_{campaign_id}", spec.budget_per_video))
         preset = preset_of(spec, campaign_id)
-        w, cr = ranking.ahp_weights(ranking.AHP_PRESETS[preset])
-        st.caption(f"AHP pairwise preset · consistency ratio {cr:.3f} {'(consistent)' if cr <= 0.1 else '(> 0.1!)'}")
-        st.toggle("Adjust weights manually", **keep(f"custom_{campaign_id}", False))
+        w, _ = ranking.ahp_weights(ranking.AHP_PRESETS[preset])
+        st.toggle("Fine-tune weights", **keep(f"custom_{campaign_id}", False))
         for g, x in zip(ranking.GROUPS, w):
             st.slider(GROUP_LABEL[g], 0.0, 1.0, step=0.01, disabled=not ss.get(f"custom_{campaign_id}"),
                       **keep(f"w_{campaign_id}_{preset}_{g}", float(round(x, 2))))
@@ -726,7 +751,7 @@ def discover_page(ctx: dict, short: list[str]) -> None:
         band_title(spec.product,
                    "".join(ui.chip(x) for x in [COUNTRY.get(spec.target_country, spec.target_country), ctx["lang"],
                                                  spec.price_segment,
-                                                 f"Goal: {preset_of(spec, ctx['campaign']['id']).capitalize()}"] if x),
+                                                 f"Priority: {PRIORITY[preset_of(spec, ctx['campaign']['id'])][0]}"] if x),
                    f"YouTube: {len(vms)} ranked · {analysed} analysed · {analysed - len(vms)} filtered out")
     c = ctx["campaign"]["id"]  # filters survive a visit to a creator's analysis and back
     counts = {"youtube": len(vms), **{pl: len(P["vms"]) for pl, P in ctx["platforms"].items()}}
@@ -861,7 +886,7 @@ def platform_page(ctx: dict, platform: str, short: list[str]) -> None:
     with st.expander(f"How the {name} ranking works"):
         html(f'<div class="pn-muted" style="margin-bottom:8px">Own ranking for {name}: numbers from the official '
              f'{name} API plus one AI judgement of the profile’s own text (audience relevance, with verbatim quotes). '
-             'Same campaign goal and weights as YouTube; scores are relative to the other '
+             'Same campaign priority and weights as YouTube; scores are relative to the other '
              f'{name} candidates and not comparable with the YouTube score.</div>')
         if P["used"]:
             html("".join(ui.metric_bar(ranking.CRITERION_BY_NAME[k].label, 100 * w, display=f"{w:.0%}")
@@ -876,8 +901,12 @@ def method_section(ctx: dict) -> None:
     st.write("")
     with st.expander("Ranking method & weights"):
         gw = ctx["group_w"]
+        preset = preset_of(ctx["spec"], ctx["campaign"]["id"])
+        _, cr = ranking.ahp_weights(ranking.AHP_PRESETS[preset])
         html('<div class="pn-muted" style="margin-bottom:8px">Scores are relative to this candidate set. '
-             'Confidence is shown separately and never changes the score.</div>')
+             'Confidence is shown separately and never changes the score. '
+             f'Campaign priority “{PRIORITY[preset][0]}” sets these group weights (AHP pairwise preset, '
+             f'consistency ratio {cr:.3f}); TOPSIS then scores each creator against them.</div>')
         html("".join(ui.metric_bar(GROUP_LABEL[g], 100 * w, display=f"{w:.0%}") for g, w in gw.items()))
         if ctx["res"].attrs.get("dropped"):
             html('<div class="pn-note">Not used in this ranking (known for &lt; '

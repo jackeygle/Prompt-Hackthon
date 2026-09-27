@@ -13,7 +13,7 @@ GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 AZURE_OPENAI_ENDPOINT = os.getenv("AZURE_OPENAI_ENDPOINT", "")
 AZURE_OPENAI_API_KEY = os.getenv("AZURE_OPENAI_API_KEY", "")
-AZURE_OPENAI_DEPLOYMENT = os.getenv("AZURE_OPENAI_DEPLOYMENT", "")
+AZURE_OPENAI_DEPLOYMENT = os.getenv("AZURE_OPENAI_DEPLOYMENT", "gpt-5.6-sol")
 TAVILY_API_KEY = os.getenv("TAVILY_API_KEY", "")
 TWITCH_CLIENT_ID = os.getenv("TWITCH_CLIENT_ID", "")
 TWITCH_CLIENT_SECRET = os.getenv("TWITCH_CLIENT_SECRET", "")
@@ -22,32 +22,27 @@ INSTAGRAM_USER_ID = os.getenv("INSTAGRAM_USER_ID", "")  # optional: found via /m
 
 DB_PATH = Path(os.getenv("DB_PATH", ROOT / "data" / "creator_intel.db"))
 
-# Text LLM: "provider/model", tried in order; later entries are fallbacks (missing key, 404, rate limit).
-# Groq is primary (fast, free tier). Gemini stays as a fallback because it is already configured.
-LLM_MODELS = [m.strip() for m in os.getenv(
-    "LLM_MODELS",
-    "groq/meta-llama/llama-4-scout-17b-16e-instruct,groq/openai/gpt-oss-20b,"
-    "gemini/gemini-3.5-flash,gemini/gemini-3.1-flash-lite",
-).split(",") if m.strip()]
-# Vision: cheapest OpenAI vision models first; images are sent as URLs with detail=low.
-VLM_MODELS = [m.strip() for m in os.getenv(
-    "VLM_MODELS", "openai/gpt-4.1-nano,openai/gpt-5-nano,openai/gpt-4o-mini"
-).split(",") if m.strip()]
+# One model for the whole pipeline: gpt-5.6-sol on Azure (text extraction, vision on thumbnails, web search).
+# "provider/model", tried in order; add fallbacks via LLM_MODELS / VLM_MODELS if needed.
+LLM_MODELS = [m.strip() for m in os.getenv("LLM_MODELS", "azure/gpt-5.6-sol").split(",") if m.strip()]
+VLM_MODELS = [m.strip() for m in os.getenv("VLM_MODELS", "azure/gpt-5.6-sol").split(",") if m.strip()]
 LLM_CONCURRENCY = int(os.getenv("LLM_CONCURRENCY", "6"))
 # Requests per minute per model, by provider (free-tier defaults; raise when on paid tiers)
 PROVIDER_RPM = {"gemini": int(os.getenv("GEMINI_RPM", "5")), "groq": int(os.getenv("GROQ_RPM", "25")),
-                "openai": int(os.getenv("OPENAI_RPM", "60")), "anthropic": 50}
+                "openai": int(os.getenv("OPENAI_RPM", "60")), "azure": int(os.getenv("AZURE_RPM", "60")),
+                "anthropic": 50}
 
 # Transcripts: unofficial library works from residential IPs, usually not from cloud.
 TRANSCRIPTS_ENABLED = os.getenv("TRANSCRIPTS_ENABLED", "1") == "1"
 
 # Pipeline sizes (see assessment §7)
-N_QUERIES = int(os.getenv("N_QUERIES", "6"))
+N_QUERIES = int(os.getenv("N_QUERIES", "6"))            # topic/content YouTube searches (main discovery path)
+N_CREATOR_QUERIES = int(os.getenv("N_CREATOR_QUERIES", "2"))  # direct "top creator" searches (secondary path)
 SEARCH_RESULTS_PER_QUERY = int(os.getenv("SEARCH_RESULTS_PER_QUERY", "50"))
 MIN_SUBSCRIBERS = 2_000
 MAX_SUBSCRIBERS = 3_000_000
 DEFAULT_N_CREATORS = int(os.getenv("DEFAULT_N_CREATORS", "10"))
-N_CREATOR_OPTIONS = [5, 10, 20, 50]
+MAX_N_CREATORS = 50           # "Creators to analyze" slider: 1..50
 N_AFTER_CHEAP_FILTER = int(os.getenv("N_AFTER_CHEAP_FILTER", "25"))
 MAX_SCREENED = int(os.getenv("MAX_SCREENED", "100"))
 UPLOADS_TO_SCAN = int(os.getenv("UPLOADS_TO_SCAN", "30"))
@@ -66,8 +61,8 @@ ASSUMED_CPM_EUR = 20.0      # ASSUMED CPM for the cost proxy. Not a creator quot
 
 # Web discovery: ChatGPT web search (OpenAI Responses API, web_search tool) by default, Tavily as alternative/fallback.
 WEB_DISCOVERY_ENABLED = os.getenv("WEB_DISCOVERY_ENABLED", "1") == "1"
-WEB_SEARCH_PROVIDER = os.getenv("WEB_SEARCH_PROVIDER", "openai")   # "openai" | "tavily"
-WEB_SEARCH_MODEL = os.getenv("WEB_SEARCH_MODEL", "gpt-4.1-mini")   # must support the web_search tool
+WEB_SEARCH_PROVIDER = os.getenv("WEB_SEARCH_PROVIDER", "azure")    # "azure" | "openai" | "tavily"
+WEB_SEARCH_MODEL = os.getenv("WEB_SEARCH_MODEL", "gpt-5.6-sol")    # OpenAI path; Azure uses AZURE_OPENAI_DEPLOYMENT
 OPENAI_SEARCH_CALLS = 3        # YouTube / TikTok+Instagram / Twitch focus, one search-enabled call each
 OPENAI_SEARCH_CREATORS = 15    # nominations requested per call
 # Tavily: basic search = 1 credit; dev tier ~1,000 credits/month.

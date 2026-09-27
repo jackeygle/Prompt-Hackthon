@@ -27,7 +27,7 @@ from collectors import InstagramCollector, LinkedAccountCollector, TwitchCollect
 from llm import LLMClient
 from llm import dead_models as llm_dead_models
 from llm import missing_keys as llm_missing_keys
-from models import CampaignSpec, CampaignSpecDraft
+from models import CampaignSpec, CampaignSpecDraft, SearchPlan
 
 log = logging.getLogger("pipeline")
 
@@ -40,6 +40,49 @@ used/refurbished), the rest about the audience's interests (e.g. for gaming PCs:
 GPUs, gaming setups, tech reviews). Keep each query short (2-6 words).
 Only fill min_subscribers / max_subscribers / price_segment when the brief states them; otherwise null.
 Also write 6 web_queries for discovering creators and their profiles on other platforms (see field description)."""
+
+
+PLAN_SYSTEM = """You write the creator-discovery search strategy for an influencer campaign.
+Principle: audience -> what they currently care about -> the content they watch -> the creator behind it.
+A real viewer does not search for "newest games" or "gaming influencer"; they search for the actual game, product
+or question. Build the content_queries from the CONCRETE CURRENT TOPICS given (actual names), phrased the way
+the target audience searches (gameplay, tips, test, review, FPS, settings, comparison, "is it worth it", ...), in
+the target market's language where people search that way, keeping product and game names as people type them.
+Spread the content_queries over the audience's whole attention, not only the product angle:
+- about half on the main things they follow for their own sake (for gamers: the games themselves: gameplay, tips,
+  updates, news, highlights, tournaments, where the big gaming creators are), without a hardware or buying angle;
+- some on adjacent questions (for gamers: performance / FPS, settings, hardware comparisons, setups);
+- at most one about buying the promoted product itself, and only if it has a product. Relevance means the creator reaches an audience that could buy, not that they cover the product: for
+gaming PCs that includes gaming, tech and hardware creators broadly, not only PC-building channels.
+If the campaign is not about gaming or tech, follow its own topic and never add gaming or tech terms.
+creator_queries are the secondary path: direct "best / top creators" searches for this audience in this market.
+Keep every query short (2-6 words). Do not just append the country name to generic phrases."""
+
+
+def plan_searches(llm: LLMClient, spec: CampaignSpec) -> SearchPlan:
+    """Search strategy from the researched topics (or, without them, from the audience interests)."""
+    topics = "\n".join(f"- {t.name} ({t.kind}): {t.why}" for t in spec.current_topics) or \
+        "(no web research available: use your own knowledge of concrete current names, and say nothing generic)"
+    plan = llm.extract(SearchPlan, PLAN_SYSTEM, (
+        f"Product: {spec.product}\nNiche: {spec.niche}\nTarget audience: {spec.audience}\n"
+        f"Audience interests: {', '.join(spec.audience_interests)}\n"
+        f"Market: {spec.target_country}; language: {spec.target_language}\n\nCONCRETE CURRENT TOPICS\n{topics}\n\n"
+        f"Write {config.N_QUERIES} content_queries, {config.N_CREATOR_QUERIES} creator_queries and 6 web_queries."))
+    clean = lambda qs, n: list(dict.fromkeys(q.strip() for q in qs if q and q.strip()))[:n]
+    return SearchPlan(content_queries=clean(plan.content_queries, config.N_QUERIES),
+                      creator_queries=clean(plan.creator_queries, config.N_CREATOR_QUERIES),
+                      web_queries=clean(plan.web_queries, 6))
+
+
+def n_creator_searches(n_content: int) -> int:
+    """Direct creator searches stay the minority: at most half the topic/content searches."""
+    return min(config.N_CREATOR_QUERIES, n_content // 2)
+
+
+def discovery_queries(spec: CampaignSpec) -> list[str]:
+    """YouTube searches in run order: topic/content searches (main path), then a few direct creator searches."""
+    content = spec.search_queries[:config.N_QUERIES]
+    return list(dict.fromkeys(content + spec.creator_queries[:n_creator_searches(len(content))]))
 
 
 def parse_brief(llm: LLMClient, brief: str) -> CampaignSpec:
@@ -60,7 +103,24 @@ def parse_brief(llm: LLMClient, brief: str) -> CampaignSpec:
         data["audience_interests"] = [data["niche"]]
         sources["audience_interests"] = "default"
     sources["n_creators"] = "default"
+    # Campaign priority is a business decision the user makes on the settings page: start Balanced, never guessed
+    data["goal"], sources["goal"] = "balanced", "default"
     spec = CampaignSpec(**data, n_creators=config.DEFAULT_N_CREATORS, field_sources=sources)
+    # Current web information first, then the search strategy built on it. Both are optional: without them the
+    # brief's own queries stay (the UI says the strategy came from model knowledge).
+    if config.WEB_DISCOVERY_ENABLED:
+        spec.current_topics, err = web.research_current_topics(spec, llm)
+        if err:
+            log.warning("topic research: %s", err)
+    spec.topics_source = "web search" if spec.current_topics else "model knowledge"
+    try:
+        plan = plan_searches(llm, spec)
+        if plan.content_queries:
+            spec.search_queries, spec.creator_queries = plan.content_queries, plan.creator_queries
+            spec.web_queries = plan.web_queries or spec.web_queries
+            spec.field_sources["search_queries"] = spec.topics_source  # the spec holds its own copy of `sources`
+    except Exception as e:  # keep the brief's queries
+        log.warning("search planning failed: %s", e)
     if not spec.web_queries:
         spec.web_queries = web.default_web_queries(spec)
     return spec
@@ -120,7 +180,7 @@ def run_campaign(brief: str, spec: CampaignSpec | None = None, seed_handles: lis
     after = (datetime.now(timezone.utc) - timedelta(days=365)).strftime("%Y-%m-%dT00:00:00Z")  # day granularity keeps the cache key stable
     hits: Counter = Counter()
     hit_queries: dict[str, set] = {}
-    queries = spec.search_queries[:config.N_QUERIES]
+    queries = discovery_queries(spec)
     for i, q in enumerate(queries):
         p(f"YouTube search: “{q}”", 0.04 + 0.08 * i / max(len(queries), 1))
         try:
@@ -147,7 +207,7 @@ def run_campaign(brief: str, spec: CampaignSpec | None = None, seed_handles: lis
     p(f"Loading {len(hits)} channels", 0.13)
     chans = {c["id"]: c for c in yt.channels(list(hits))}
 
-    # 2b. Web / cross-platform discovery (ChatGPT web search, or Tavily). Optional: failures leave YouTube-only discovery intact.
+    # 2b. Web / cross-platform discovery (gpt-5.6-sol web search on Azure, or Tavily). Optional: failures leave YouTube-only discovery intact.
     web_matches: dict[str, list[dict]] = {}
     web_only: list[dict] = []
     identities: list[dict] = []
@@ -469,14 +529,14 @@ def run_campaign(brief: str, spec: CampaignSpec | None = None, seed_handles: lis
         "creators_analysed": len(results), "vlm_failures": vlm_failures[:10],
         "disabled_models": llm_dead_models(),
         "missing_env": sorted(set(llm_missing_keys(config.LLM_MODELS) + llm_missing_keys(config.VLM_MODELS)
-                                  + ([] if web.provider() else ["OPENAI_API_KEY or TAVILY_API_KEY"])
+                                  + ([] if web.provider() else ["AZURE_OPENAI_API_KEY, OPENAI_API_KEY or TAVILY_API_KEY"])
                                   + ([] if twitch.available() else ["TWITCH_CLIENT_ID", "TWITCH_CLIENT_SECRET"])
                                   + ([] if instagram.available() else ["INSTAGRAM_ACCESS_TOKEN"]))),
         "errors": errors[:20],
     }
     db.execute("INSERT OR REPLACE INTO run_stats VALUES (?,?)", (campaign_id, json.dumps(stats)))
     p(f"Done: {len(results)} creators analysed · {llm.calls} text-LLM calls ({llm.cache_hits} cached) · "
-      f"{vlm.calls} VLM calls · {web.OpenAISearchUsage.calls} ChatGPT web searches · {web.TavilyUsage.calls} Tavily calls · {twitch.TwitchUsage.calls} Twitch calls · ~{yt.QuotaUsage.units} YouTube quota units",
+      f"{vlm.calls} VLM calls · {web.OpenAISearchUsage.calls} model web searches · {web.TavilyUsage.calls} Tavily calls · {twitch.TwitchUsage.calls} Twitch calls · ~{yt.QuotaUsage.units} YouTube quota units",
       1.0)
     return campaign_id
 
@@ -534,7 +594,7 @@ def rank_and_store(campaign_id: str, preset: str, extra: dict | None = None) -> 
     import pandas as pd
     feats = load_features(campaign_id)
     w_groups, _ = ranking.ahp_weights(ranking.AHP_PRESETS[preset])
-    weights = ranking.criterion_weights(dict(zip(ranking.GROUPS, w_groups)))
+    weights = ranking.criterion_weights(dict(zip(ranking.GROUPS, w_groups)), preset=preset)
     passed = {cid: ranking.hard_filter(f) for cid, f in feats.items()}
     ok = [cid for cid, (p, _) in passed.items() if p]
     df = pd.DataFrame({cid: feats[cid] for cid in ok}).T.reindex(columns=[c.name for c in ranking.CRITERIA])
@@ -560,7 +620,7 @@ def rank_platform_and_store(campaign_id: str, platform: str, preset: str, meta: 
     crits = ranking.PLATFORM_CRITERIA[platform]
     feats = load_features(campaign_id, platform + ":")
     w_groups, _ = ranking.ahp_weights(ranking.AHP_PRESETS[preset])
-    weights = ranking.criterion_weights(dict(zip(ranking.GROUPS, w_groups)), crits)
+    weights = ranking.criterion_weights(dict(zip(ranking.GROUPS, w_groups)), crits, preset)
     passed = {cid: ranking.platform_hard_filter(platform, f) for cid, f in feats.items()}
     ok = [cid for cid, (p_ok, _) in passed.items() if p_ok]
     df = pd.DataFrame({cid: feats[cid] for cid in ok}).T.reindex(columns=[c.name for c in crits])

@@ -74,23 +74,44 @@ CRITERION_BY_NAME = {c.name: c for crits in PLATFORM_CRITERIA.values() for c in 
 # ------------------------------------------------------------------ AHP
 RI = {1: 0.0, 2: 0.0, 3: 0.58, 4: 0.90, 5: 1.12, 6: 1.24, 7: 1.32, 8: 1.41, 9: 1.45}
 
-# Pairwise matrices over GROUPS (row vs column), Saaty 1-9 scale.
+# Campaign priority (UI: "Drive sales" / "Reach more gamers" / "Balanced") = one pairwise matrix over GROUPS
+# (row vs column, Saaty 1-9 scale) plus a few sub-weight shifts inside groups. One ranking system, re-weighted.
+# Campaign Fit stays heavy in every priority, so relevance is always required.
 AHP_PRESETS = {
-    "conversion": [[1, 2, 2, 4, 3],
+    # Drive sales: fit, purchase intent / community and product credibility first; reach matters least
+    "conversion": [[1, 2, 1, 4, 3],
                    [1/2, 1, 1, 3, 2],
-                   [1/2, 1, 1, 3, 2],
+                   [1, 1, 1, 3, 2],
                    [1/4, 1/3, 1/3, 1, 1/2],
                    [1/3, 1/2, 1/2, 2, 1]],
-    "awareness": [[1, 2, 2, 1/2, 2],
-                  [1/2, 1, 1, 1/3, 1],
-                  [1/2, 1, 1, 1/3, 1],
-                  [2, 3, 3, 1, 3],
-                  [1/2, 1, 1, 1/3, 1]],
-    "balanced": [[1, 1, 1, 2, 2],
-                 [1, 1, 1, 2, 2],
-                 [1, 1, 1, 2, 2],
-                 [1/2, 1/2, 1/2, 1, 1],
-                 [1/2, 1/2, 1/2, 1, 1]],
+    # Reach more gamers: relevant reach first, audience fit a strong second
+    "awareness": [[1, 3, 3, 1/2, 3],
+                  [1/3, 1, 1, 1/6, 1],
+                  [1/3, 1, 1, 1/6, 1],
+                  [2, 6, 6, 1, 6],
+                  [1/3, 1, 1, 1/6, 1]],
+    # Balanced: fit and relevant reach equal; sales signals and cost in between
+    "balanced": [[1, 2, 2, 1, 2],
+                 [1/2, 1, 1, 1/2, 1],
+                 [1/2, 1, 1, 1/2, 1],
+                 [1, 2, 2, 1, 2],
+                 [1/2, 1, 1, 1/2, 1]],
+}
+# Sub-weight shifts per priority (replace Criterion.sub_weight; renormalised within the group).
+PRIORITY_SUB_WEIGHTS = {
+    "conversion": {"purchase_intent_ratio": 0.45, "meaningful_ratio": 0.25, "technical_question_ratio": 0.20,
+                   "creator_reply_rate": 0.10},
+    "awareness": {
+        # fit = does the audience match (not: is the content about the product)
+        "audience_relevance": 0.45, "niche_relevance": 0.25, "product_relevance": 0.05,
+        "price_segment_relevance": 0.05, "target_lang_share": 0.20,
+        # reach = relevant views, not efficiency ratios that favour small channels
+        "log_median_views": 0.80, "engagement_rate": 0.10, "view_efficiency": 0.05, "view_cv": 0.05,
+        # the cost proxy grows with views; don't let it cancel the reach priority
+        "log_est_cost_eur": 0.20, "spam_ratio": 0.40, "days_since_last_relevant": 0.40,
+        "tw_log_followers": 0.45, "tw_log_median_vod_views": 0.45, "tw_streams_30d": 0.10,
+        "ig_log_followers": 0.60, "ig_log_median_likes": 0.30, "ig_posts_30d": 0.10},
+    "balanced": {},
 }
 
 
@@ -108,16 +129,18 @@ def ahp_weights(matrix) -> tuple[np.ndarray, float]:
     return w, cr
 
 
-def criterion_weights(group_weights: dict[str, float], criteria=None) -> dict[str, float]:
-    """Final weight = group weight (AHP) x sub-weight (normalised within the group).
-    Groups without criteria on a platform (e.g. Content Credibility on Twitch) drop out; the rest renormalise."""
+def criterion_weights(group_weights: dict[str, float], criteria=None, preset: str | None = None) -> dict[str, float]:
+    """Final weight = group weight (AHP) x sub-weight (normalised within the group); the campaign priority (`preset`)
+    may shift sub-weights. Groups without criteria on a platform (e.g. Content Credibility on Twitch) drop out."""
     criteria = CRITERIA if criteria is None else criteria
+    shift = PRIORITY_SUB_WEIGHTS.get(preset or "", {})
     out = {}
     for g in GROUPS:
         members = [c for c in criteria if c.group == g]
-        total = sum(c.sub_weight for c in members)
+        sub = {c.name: shift.get(c.name, c.sub_weight) for c in members}
+        total = sum(sub.values())
         for c in members:
-            out[c.name] = group_weights.get(g, 0.0) * c.sub_weight / total
+            out[c.name] = group_weights.get(g, 0.0) * sub[c.name] / total
     s = sum(out.values()) or 1.0
     return {k: v / s for k, v in out.items()}
 

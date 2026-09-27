@@ -2,7 +2,8 @@
 
     python check_setup.py
 
-Cost: ~2 YouTube quota units, 1 ChatGPT web search (or 1 Tavily credit), 3 free Twitch calls, 2 Instagram Graph calls, 1 tiny Groq call, 1 tiny OpenAI vision call.
+Cost: ~2 YouTube quota units, 1 gpt-5.6-sol web search (or 1 Tavily credit), 3 free Twitch calls, 2 Instagram Graph calls,
+1 tiny text call and 1 tiny vision call on the configured models (gpt-5.6-sol on Azure by default).
 """
 import os
 import sys
@@ -74,38 +75,35 @@ def check_llm_calls():
     class Pong(BaseModel):
         answer: str
 
-    if config.GROQ_API_KEY:
-        groq_only = [m for m in config.LLM_MODELS if m.startswith("groq/")]
-        try:
-            c = LLMClient(groq_only)
-            out = c.extract(Pong, "Reply with JSON.", f"Say 'pong' (check {os.getpid()})", deadline_s=60)
-            report("Groq structured call", OK, f"{out.answer!r} via {list(c.calls_by_model)[-1]}")
-        except Exception as e:
-            report("Groq structured call", FAIL, str(e)[:160])
-    if config.OPENAI_API_KEY:
-        try:
-            c = LLMClient(config.VLM_MODELS)
-            out = c.extract(Pong, "Reply with JSON.", f"What is shown? One word. ({os.getpid()})",
-                            images=["https://i.ytimg.com/vi/dQw4w9WgXcQ/hqdefault.jpg"], deadline_s=60)
-            report("OpenAI vision call", OK, f"{out.answer!r} via {list(c.calls_by_model)[-1]}")
-        except Exception as e:
-            report("OpenAI vision call", FAIL, str(e)[:160])
+    try:
+        c = LLMClient(config.LLM_MODELS)
+        out = c.extract(Pong, "Reply with JSON.", f"Say 'pong' (check {os.getpid()})", deadline_s=60)
+        report("Text model call", OK, f"{out.answer!r} via {list(c.calls_by_model)[-1]}")
+    except Exception as e:
+        report("Text model call", FAIL, str(e)[:160])
+    try:
+        c = LLMClient(config.VLM_MODELS)
+        out = c.extract(Pong, "Reply with JSON.", f"What is shown? One word. ({os.getpid()})",
+                        images=["https://i.ytimg.com/vi/dQw4w9WgXcQ/hqdefault.jpg"], deadline_s=60)
+        report("Vision model call", OK, f"{out.answer!r} via {list(c.calls_by_model)[-1]}")
+    except Exception as e:
+        report("Vision model call", FAIL, str(e)[:160])
 
 
 def check_web_search():
     import web_discovery as web
     which = web.provider()
     if which is None:
-        report("Web search", WARN, "no OPENAI_API_KEY / TAVILY_API_KEY → YouTube-only discovery")
-    elif which == "openai":
+        report("Web search", WARN, "no AZURE_OPENAI / OPENAI / TAVILY key → YouTube-only discovery")
+    elif which in web.MODEL_SEARCH:
         try:
             data, cited = web.openai_web_search(
                 'Use web search. Name one German PC hardware YouTuber. Answer only JSON: {"creators": '
-                '[{"name": "...", "profile_url": "..."}]}')
+                '[{"name": "...", "profile_url": "..."}]}', via=which)
             names = [c.get("name") for c in data.get("creators", [])]
-            report("ChatGPT web search", OK, f"{config.WEB_SEARCH_MODEL}: {names[:1]} · {len(cited)} cited sources")
+            report("Model web search", OK, f"{which}/{web.search_model(which)}: {names[:1]} · {len(cited)} cited sources")
         except Exception as e:
-            report("ChatGPT web search", FAIL, str(e)[:160]
+            report("Model web search", FAIL, str(e)[:160]
                    + (" → set WEB_SEARCH_MODEL to a model with web search" if "400" in str(e) else ""))
     else:
         check_tavily()
@@ -168,8 +166,10 @@ if __name__ == "__main__":
     print("Creator Intelligence Engine – setup check\n")
     check_env()
     check_youtube()
-    check_chain("Groq", "https://api.groq.com/openai/v1", config.GROQ_API_KEY, config.LLM_MODELS, "groq")
-    check_chain("OpenAI", "https://api.openai.com/v1", config.OPENAI_API_KEY, config.VLM_MODELS, "openai")
+    if any(m.startswith("groq/") for m in config.LLM_MODELS):
+        check_chain("Groq", "https://api.groq.com/openai/v1", config.GROQ_API_KEY, config.LLM_MODELS, "groq")
+    if any(m.startswith("openai/") for m in config.LLM_MODELS + config.VLM_MODELS):
+        check_chain("OpenAI", "https://api.openai.com/v1", config.OPENAI_API_KEY, config.VLM_MODELS, "openai")
     check_llm_calls()
     check_web_search()
     check_twitch()

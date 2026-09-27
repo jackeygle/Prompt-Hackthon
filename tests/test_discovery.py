@@ -98,6 +98,7 @@ def test_chatgpt_web_search_keeps_only_verifiable_nominations(monkeypatch, tmp_p
 def test_provider_falls_back_to_available_key(monkeypatch):
     monkeypatch.setattr(web.config, "WEB_SEARCH_PROVIDER", "openai")
     monkeypatch.setattr(web.config, "OPENAI_API_KEY", "")
+    monkeypatch.setattr(web.config, "AZURE_OPENAI_API_KEY", "")  # Azure (gpt-5.6-sol) is a provider too
     monkeypatch.setattr(web.config, "TAVILY_API_KEY", "t")
     assert web.provider() == "tavily"
     monkeypatch.setattr(web.config, "TAVILY_API_KEY", "")
