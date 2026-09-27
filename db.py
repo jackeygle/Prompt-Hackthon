@@ -50,6 +50,12 @@ CREATE TABLE IF NOT EXISTS visual_tags (
 
 CREATE TABLE IF NOT EXISTS run_stats (campaign_id TEXT PRIMARY KEY, stats_json TEXT);
 
+-- TikTok Scout: campaign-scoped research leads for human review. Deliberately minimal: no metrics, no profile data.
+-- status: suggested | ignored; shortlisting lives in the normal shortlist table as creator_id 'tiktok:<handle>'
+CREATE TABLE IF NOT EXISTS tiktok_leads (
+  campaign_id TEXT, handle TEXT, url TEXT, name TEXT, topic TEXT, source_url TEXT, verified INTEGER,
+  origin TEXT, status TEXT, created_at TEXT, PRIMARY KEY (campaign_id, handle));
+
 CREATE TABLE IF NOT EXISTS api_cache (key TEXT PRIMARY KEY, response TEXT, created_at TEXT);
 """
 
@@ -111,7 +117,8 @@ def delete_campaign(campaign_id: str) -> None:
     with _lock:
         c = conn()
         with c:
-            for table in ("features", "evidence", "rankings", "discoveries", "visual_tags", "run_stats", "shortlist"):
+            for table in ("features", "evidence", "rankings", "discoveries", "visual_tags", "run_stats", "shortlist",
+                          "tiktok_leads"):
                 if c.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (table,)).fetchone():
                     c.execute(f"DELETE FROM {table} WHERE campaign_id=?", (campaign_id,))
             c.execute("DELETE FROM campaigns WHERE id=?", (campaign_id,))

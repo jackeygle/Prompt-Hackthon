@@ -321,3 +321,49 @@ def test_create_campaign_flow_passes_budget(db_copy, monkeypatch):
     assert seen["spec"].budget_per_video == 2500
     assert seen["spec"].n_creators == 23 and seen["spec"].goal == "conversion"  # reach the pipeline, not only the UI
     assert at.session_state["view"] == "discover" and at.session_state["campaign"] == existing
+
+
+# ------------------------------------------------------------------ TikTok Scout (human-in-the-loop)
+def _scout(at: AppTest, cid: str) -> AppTest:
+    at.segmented_control(key=f"_w_f_platform_{cid}").set_value("tiktok").run()
+    assert not at.exception, [e.value for e in at.exception]
+    return at
+
+
+def test_tiktok_scout_leads_need_an_explicit_human_decision(db_copy, monkeypatch):
+    import tiktok_scout as tts
+    leads = [tts.Lead("pc_max", "https://www.tiktok.com/@pc_max", "Counter-Strike 2",
+                      "https://www.tiktok.com/@pc_max", True, "tiktok link"),
+             tts.Lead("ghost_user", "https://www.tiktok.com/@ghost_user", "Fortnite", "https://nowhere.example",
+                      False, "article")]
+    monkeypatch.setattr(tts.WebResearchScout, "find_leads", lambda self, spec, n=8: (leads, []))
+    cid = campaigns_with_results(db_copy)[0]
+    at = _scout(open_campaign(start(db_copy), cid), cid)
+    assert "TikTok itself is not crawled or scored" in text(at)
+    click(at, "tt_find")
+    assert keys(at, "tt_sl_") == ["tt_sl_pc_max", "tt_sl_ghost_user"]
+    assert at.button(key="btn_cart").label == "Shortlist"  # surfacing a lead never shortlists it
+    assert "could not be verified. Open TikTok to review it manually." in text(at)
+    click(at, "tt_ignore_ghost_user")
+    assert keys(at, "tt_sl_") == ["tt_sl_pc_max"]
+    click(at, "tt_sl_pc_max")  # the marketer's explicit decision
+    assert at.button(key="btn_cart").label == "Shortlist (1)"
+    click(at, "btn_cart")
+    t = text(at)
+    assert "HUMAN-SELECTED TIKTOK LEAD" in t and "Not analysed · no score" in t
+    assert "human-selected lead (reviewed on TikTok, not analysed, no score)" in at.code[0].value
+
+
+def test_tiktok_manual_add_validates_the_link(db_copy):
+    cid = campaigns_with_results(db_copy)[0]
+    at = _scout(open_campaign(start(db_copy), cid), cid)
+    at.text_input(key="tt_url").set_value("https://www.tiktok.com/shop/pdp/123").run()
+    click(at, "tt_add")
+    assert at.error and "isn't a TikTok creator link" in at.error[0].value
+    assert at.button(key="btn_cart").label == "Shortlist"
+    at.text_input(key="tt_url").set_value("https://www.tiktok.com/@known_creator").run()
+    at.text_input(key="tt_name").set_value("Known Creator").run()
+    click(at, "tt_add")
+    assert at.button(key="btn_cart").label == "Shortlist (1)"
+    click(at, "btn_cart")
+    assert "Known Creator" in text(at)

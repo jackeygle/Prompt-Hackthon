@@ -17,6 +17,7 @@ import db
 import pipeline
 import ranking
 import ui
+import tiktok_scout as tts
 import web_discovery as web
 from llm import LLMClient, missing_keys
 from models import CampaignSpec
@@ -97,7 +98,7 @@ REASON = {
     "ig_posts_30d": ("Posts regularly", "Posts rarely"),
     "ig_days_since_last_post": ("Posted recently", "Has not posted recently"),
 }
-PLATFORMS = {"youtube": "YouTube", "twitch": "Twitch", "instagram": "Instagram"}
+PLATFORMS = {"youtube": "YouTube", "twitch": "Twitch", "instagram": "Instagram", "tiktok": "TikTok"}
 EVIDENCE_KIND = {"audience_relevance": "Audience relevance", "niche_relevance": "Niche relevance", "product_relevance": "Product relevance",
                  "price_segment_relevance": "Price-segment evidence", "first_hand_experience": "Hands-on evidence",
                  "benchmark_discussion": "Test & results evidence", "price_discussion": "Price evidence",
@@ -138,7 +139,8 @@ def shortlist_ids(campaign_id: str) -> list[str]:
 
 
 def toggle_shortlist(campaign_id: str, cid: str) -> None:
-    name = (db.query("SELECT name FROM creators WHERE id=?", (cid,)) or [{"name": "Creator"}])[0]["name"]
+    name = ("@" + cid[len(tts.PREFIX):] if cid.startswith(tts.PREFIX) else
+            (db.query("SELECT name FROM creators WHERE id=?", (cid,)) or [{"name": "Creator"}])[0]["name"])
     if cid in shortlist_ids(campaign_id):
         db.execute("DELETE FROM shortlist WHERE campaign_id=? AND creator_id=?", (campaign_id, cid))
         ss.toast = (f"Removed {name} from the shortlist", ":material/bookmark_remove:")
@@ -754,10 +756,15 @@ def discover_page(ctx: dict, short: list[str]) -> None:
                                                  f"Priority: {PRIORITY[preset_of(spec, ctx['campaign']['id'])][0]}"] if x),
                    f"YouTube: {len(vms)} ranked · {analysed} analysed · {analysed - len(vms)} filtered out")
     c = ctx["campaign"]["id"]  # filters survive a visit to a creator's analysis and back
-    counts = {"youtube": len(vms), **{pl: len(P["vms"]) for pl, P in ctx["platforms"].items()}}
+    counts = {"youtube": len(vms), **{pl: len(P["vms"]) for pl, P in ctx["platforms"].items()},
+              "tiktok": len(tts.leads_for(c, "suggested"))}
     platform = st.segmented_control(
         "Platform", list(PLATFORMS), required=True, label_visibility="collapsed",
-        format_func=lambda pl: f"{PLATFORMS[pl]} · {counts[pl]}", **keep(f"f_platform_{c}", "youtube"))
+        format_func=lambda pl: (f"TikTok Scout · {counts[pl]} leads" if pl == "tiktok"
+                                else f"{PLATFORMS[pl]} · {counts[pl]}"), **keep(f"f_platform_{c}", "youtube"))
+    if platform == "tiktok":
+        tiktok_scout_page(ctx, short)
+        return
     if platform != "youtube":
         platform_page(ctx, platform, short)
         return
@@ -895,6 +902,89 @@ def platform_page(ctx: dict, platform: str, short: list[str]) -> None:
     if excluded:
         with st.expander(f"Excluded by filters ({len(excluded)})"):
             st.dataframe(pd.DataFrame(excluded, columns=["Creator", "Reason"]), hide_index=True, width="stretch")
+
+
+# ------------------------------------------------------------------ TikTok Scout (human-in-the-loop, see tiktok_scout.py)
+def _tt_add_from_form(campaign_id: str) -> None:
+    url, name = ss.get("tt_url", ""), ss.get("tt_name", "")
+    ref = tts.add_manual(campaign_id, url, name)
+    if ref is None:
+        ss.tt_error = "That isn't a TikTok creator link. Use a link like https://www.tiktok.com/@handle."
+        return
+    ss.tt_url, ss.tt_name = "", ""
+    ss.toast = (f"Added @{ref.handle} to the shortlist", ":material/bookmark_added:")
+
+
+def tiktok_lead_card(L: dict, campaign_id: str, shortlisted: bool) -> None:
+    h = L["handle"]
+    same = L["source_url"] == L["url"]
+    host = (tts.urlparse(L["source_url"] or "").hostname or "").removeprefix("www.")
+    source = ("TikTok link found by public web search" if same else
+              f'<a href="{esc(L["source_url"])}" target="_blank">{esc(host)} ↗</a>')
+    with st.container(key=f"card-tt-{ui.key(h)}"):
+        html(f'<div class="pn-card-head"><div class="who"><div class="pn-rank">{ui.platform_icon("tiktok", 13)} '
+             f'TikTok · {"potential lead" if L["origin"] != "manual" else "added by you"}</div>'
+             f'<div class="name">@{esc(h)}</div></div></div>'
+             f'<div class="pn-subtle" style="margin:8px 0 2px">Found through: <b>{esc(L["topic"] or "campaign research")}</b></div>'
+             f'<div class="pn-subtle">Source: {source}</div>'
+             + ('' if L["verified"] or L["origin"] == "manual" else
+                '<div class="pn-note" style="margin-top:8px">This TikTok content could not be verified. '
+                'Open TikTok to review it manually.</div>'))
+        a, b = st.columns(2)
+        a.link_button("Open on TikTok", L["url"], icon=":material/open_in_new:", width="stretch")
+        b.button("✓ Shortlisted" if shortlisted else "+ Add to shortlist", key=f"tt_sl_{h}", width="stretch",
+                 type="secondary" if shortlisted else "primary",
+                 on_click=toggle_shortlist, args=(campaign_id, tts.PREFIX + h))
+        if not shortlisted:
+            st.button("Ignore", key=f"tt_ignore_{h}", type="tertiary", on_click=tts.set_status,
+                      args=(campaign_id, h, "ignored"))
+
+
+def tiktok_scout_page(ctx: dict, short: list[str]) -> None:
+    c, spec = ctx["campaign"]["id"], ctx["spec"]
+    head, act = st.columns([3, 1.2], vertical_alignment="center")
+    head.markdown('<div class="pn-kicker">TikTok Scout</div><div class="pn-muted">A few TikTok leads from public web '
+                  'research for you to review on TikTok. TikTok itself is not crawled or scored; you decide who goes '
+                  'on the shortlist.</div>', unsafe_allow_html=True)
+    pending = tts.leads_for(c, "suggested")
+    if act.button("Find more leads" if pending else "Find TikTok leads", icon=":material/travel_explore:",
+                  key="tt_find", type="secondary" if pending else "primary", width="stretch"):
+        with st.spinner("Searching the public web for TikTok leads (about a minute)…"):
+            leads, errors = tts.provider().find_leads(spec)
+        new = tts.save_suggestions(c, leads)
+        ss.tt_result = (new, errors)
+        st.rerun()
+    if res := ss.pop("tt_result", None):
+        new, errors = res
+        if errors and not new:
+            st.warning("Web research could not find TikTok leads right now. " + errors[0][:160])
+        else:
+            st.caption(f"{new} new lead{'s' if new != 1 else ''} from public web research.")
+    st.write("")
+    if not pending:
+        ui.empty_state("No TikTok leads yet.", "Find leads from public web research, or add a creator you already know.")
+    for i in range(0, len(pending), 3):
+        for col, L in zip(st.columns(3, gap="medium"), pending[i:i + 3]):
+            with col:
+                tiktok_lead_card(L, c, tts.PREFIX + L["handle"] in short)
+    st.write("")
+    with st.container(key="panel-tt-add"):
+        html('<div class="pn-kicker">Add TikTok creator</div><div class="pn-subtle" style="margin-bottom:6px">'
+             'Paste the profile link of a creator you already reviewed. Only the link is stored.</div>')
+        u, n, go_ = st.columns([3, 1.6, 1], vertical_alignment="bottom")
+        u.text_input("TikTok creator/profile URL", key="tt_url", placeholder="https://www.tiktok.com/@creator")
+        n.text_input("Name (optional)", key="tt_name")
+        go_.button("Add", key="tt_add", on_click=_tt_add_from_form, args=(c,), width="stretch")
+        if err := ss.pop("tt_error", None):
+            st.error(err)
+    ignored = tts.leads_for(c, "ignored")
+    if ignored:
+        with st.expander(f"Ignored leads ({len(ignored)})"):
+            for L in ignored:
+                x, y = st.columns([4, 1], vertical_alignment="center")
+                x.markdown(f"@{esc(L['handle'])} · {esc(L['topic'] or '')}")
+                y.button("Restore", key=f"tt_restore_{L['handle']}", type="tertiary", on_click=tts.set_status,
+                         args=(c, L["handle"], "suggested"))
 
 
 def method_section(ctx: dict) -> None:
@@ -1169,7 +1259,25 @@ def shortlist_page(ctx: dict, short: list[str]) -> None:
         name = vm["name"] if vm else ctx["creators"].get(cid, {}).get("name", cid)
         with st.container(key=f"card-sl-{ui.key(cid)}"):
             a, b, c, d = st.columns([3.2, 1.2, 1.1, 1.1], vertical_alignment="center")
-            if pvm:
+            if cid.startswith(tts.PREFIX):  # human-selected TikTok lead: link + why, never a score
+                h = cid[len(tts.PREFIX):]
+                L = tts.lead(ctx["campaign"]["id"], h) or {}
+                label = L.get("name") or f"@{h}"
+                url = L.get("url") or f"https://www.tiktok.com/@{h}"
+                a.markdown(f'<div class="pn-card-head"><div class="who"><div class="name">{esc(label)}</div>'
+                           f'<div class="meta">{ui.platform_icon("tiktok", 12)} TikTok · @{esc(h)}'
+                           f'{" · found through " + esc(L["topic"]) if L.get("topic") else ""}</div>'
+                           f'<div style="margin-top:6px">{ui.human_lead_badge()}</div></div></div>',
+                           unsafe_allow_html=True)
+                b.markdown('<div class="pn-subtle" style="text-align:right">Not analysed · no score</div>',
+                           unsafe_allow_html=True)
+                c.link_button("Open on TikTok", url, width="stretch")
+                rows.append({"creator": label, "platform": "TikTok", "rank": None, "cost_proxy_eur": None,
+                             "campaign_score": None, "data_confidence": None, "subscribers": None,
+                             "median_relevant_views": None, "channel_url": url,
+                             "reasons": "Human-selected TikTok lead" + (f"; found through {L['topic']}"
+                                                                         if L.get("topic") else "")})
+            elif pvm:
                 pl = PLATFORMS[pvm["platform"]]
                 a.markdown(f'<div class="pn-card-head">{ui.avatar(pvm["name"], pvm["avatar"])}<div class="who">'
                            f'<div class="name">{esc(pvm["name"])}</div><div class="meta">'
@@ -1208,7 +1316,11 @@ def shortlist_page(ctx: dict, short: list[str]) -> None:
         spec = ctx["spec"]
         lines = [f"Creator shortlist — {spec.product} ({COUNTRY.get(spec.target_country, spec.target_country)})", ""]
         order = {p: i for i, p in enumerate(PLATFORMS.values())}
-        for r in sorted(rows, key=lambda r: (order[r["platform"]], r["rank"])):
+        for r in sorted(rows, key=lambda r: (order.get(r["platform"], 99), r["rank"] or 0)):
+            if r["platform"] == "TikTok":
+                lines.append(f"TikTok {r['creator']} — human-selected lead (reviewed on TikTok, not analysed, no score)")
+                lines.append(f"   {r['channel_url']}")
+                continue
             if r["platform"] == "YouTube":
                 cost = f"≈ €{ui.fmt_count(r['cost_proxy_eur'])}/video" if r["cost_proxy_eur"] else "cost n/a"
                 size = f"{ui.fmt_count(r['subscribers'])} subs · {cost}"

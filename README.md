@@ -76,6 +76,25 @@ Missing values are imputed with the unfavourable quartile and lower confidence; 
 `0.25·videos + 0.20·transcript coverage + 0.20·classified comments + 0.10·source reliability +
 0.05·visual coverage + 0.10·recency + 0.10·stats completeness` (imputed criteria reduce the last term).
 
+## TikTok Scout (human-in-the-loop)
+
+`tiktok_scout.py`, the **TikTok Scout** tab on the creators page. A few TikTok *leads* for a marketer to review
+on TikTok, not TikTok analytics:
+
+Campaign → current topics → one gpt-5.6-sol web search (existing model web search, never Tavily) → ≤ 8 links to
+TikTok creator profiles/videos (shop/tag/search pages and look-alike domains rejected, ≤ 2 from "top creator"
+articles) → **the marketer opens TikTok, reviews, and explicitly clicks Add to shortlist** (or Ignore). A creator the
+marketer already knows can be added by pasting their profile link.
+
+- No request to tiktok.com from the code (links are validated with a regex only), no browser automation,
+  scraping, oEmbed, unofficial APIs or circumvention; no followers/views/engagement/scores are extracted.
+- A lead stores only handle, link, why it surfaced, where the link came from, whether the web search actually
+  retrieved it ("could not be verified" otherwise) and the marketer's decision, per campaign (`tiktok_leads`,
+  deleted with the campaign). Nothing is shortlisted automatically.
+- Shortlisted TikTok creators appear as **Human-selected TikTok lead**, never with a score.
+- `ScoutProvider` is the seam for a future official, TikTok-approved integration; oEmbed stays disabled until
+  Prenew confirms the commercial use is permitted.
+
 ## Graceful degradation
 
 | Missing / failing | Behaviour |
