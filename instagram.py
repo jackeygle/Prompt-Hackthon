@@ -6,7 +6,9 @@ Personal accounts, audience demographics and keyword search are not available th
 
 Needs INSTAGRAM_ACCESS_TOKEN (user token with instagram_basic + pages_show_list + pages_read_engagement +
 business_management). The caller's own IG professional account id is found via /me/accounts unless
-INSTAGRAM_USER_ID is set. Responses are cached per day in SQLite.
+INSTAGRAM_USER_ID is set. Responses are cached per day in SQLite, except the
+Page-to-Instagram relationship lookup, which is always refreshed so a newly
+linked Professional account is not hidden by a stale negative result.
 """
 import hashlib
 import json
@@ -43,10 +45,10 @@ def available() -> bool:
     return bool(config.INSTAGRAM_ACCESS_TOKEN)
 
 
-def _get(path: str, params: dict) -> dict:
+def _get(path: str, params: dict, *, use_cache: bool = True) -> dict:
     day = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     key = "ig:" + hashlib.sha256(json.dumps([path, params, day], sort_keys=True).encode()).hexdigest()
-    if (hit := db.cache_get(key)) is not None:
+    if use_cache and (hit := db.cache_get(key)) is not None:
         return hit
     if not available():
         raise InstagramError("environment variable INSTAGRAM_ACCESS_TOKEN is not set", fatal=True)
@@ -62,7 +64,8 @@ def _get(path: str, params: dict) -> dict:
         # 190 = expired/invalid token, 4/17/32/613 = rate limits, 10/200 = missing permission
         fatal = code in (190, 4, 17, 32, 613, 10, 200)
         raise InstagramError(f"Instagram {code}: {err.get('message', '')[:160]}", fatal=fatal)
-    db.cache_put(key, data)
+    if use_cache:
+        db.cache_put(key, data)
     return data
 
 
@@ -70,7 +73,9 @@ def my_ig_id() -> str:
     if config.INSTAGRAM_USER_ID:
         return config.INSTAGRAM_USER_ID
     if "id" not in _me:
-        pages = _get("me/accounts", {"fields": "name,instagram_business_account"}).get("data", [])
+        # This relationship can change after the app has already run. Do not
+        # reuse an old daily cache entry, especially a previous empty response.
+        pages = _get("me/accounts", {"fields": "name,instagram_business_account"}, use_cache=False).get("data", [])
         ids = [p["instagram_business_account"]["id"] for p in pages if p.get("instagram_business_account")]
         if not ids:
             raise InstagramError("no Instagram professional account is linked to the token's Facebook Page",
