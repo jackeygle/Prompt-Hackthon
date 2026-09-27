@@ -33,7 +33,8 @@ def db_copy(tmp_path, monkeypatch):
 
 def campaigns_with_results(path: Path) -> list[str]:
     c = sqlite3.connect(path)
-    rows = c.execute("SELECT campaign_id FROM rankings WHERE passed_hard_filter=1 GROUP BY campaign_id "
+    rows = c.execute("SELECT campaign_id FROM rankings WHERE passed_hard_filter=1 AND creator_id LIKE 'yt:%' "
+                     "GROUP BY campaign_id "
                      "ORDER BY COUNT(*) DESC, campaign_id").fetchall()  # largest campaign first
     c.close()
     return [r[0] for r in rows]
@@ -181,7 +182,7 @@ def _sql(path: Path, *statements) -> None:
 def test_creator_with_missing_numbers_and_no_accounts(db_copy):
     cid = campaigns_with_results(db_copy)[0]
     creator = sqlite3.connect(db_copy).execute(
-        "SELECT creator_id FROM rankings WHERE campaign_id=? AND passed_hard_filter=1", (cid,)).fetchone()[0]
+        "SELECT creator_id FROM rankings WHERE campaign_id=? AND passed_hard_filter=1 AND creator_id LIKE 'yt:%'", (cid,)).fetchone()[0]
     _sql(db_copy,
          ("DELETE FROM features WHERE campaign_id=? AND creator_id=? AND name IN "
           "('subscribers','median_relevant_views','est_cost_eur','engagement_rate')", (cid, creator)),
@@ -202,7 +203,7 @@ def test_creator_with_missing_numbers_and_no_accounts(db_copy):
 
 def test_stale_creator_and_filtered_shortlist_entry(db_copy):
     cid = campaigns_with_results(db_copy)[0]
-    _sql(db_copy, ("INSERT INTO shortlist VALUES (?, 'yt:gone', '2026-01-01')", (cid,)))
+    _sql(db_copy, ("INSERT INTO shortlist (campaign_id, creator_id, added_at) VALUES (?, 'yt:gone', '2026-01-01')", (cid,)))
     at = open_campaign(start(db_copy), cid)
     at.session_state["view"], at.session_state["creator"] = "analysis", "yt:does-not-exist"
     at.run()
@@ -216,7 +217,7 @@ def test_unknown_country_language_and_single_creator(db_copy):
     spec = sqlite3.connect(db_copy).execute("SELECT spec_json FROM campaigns WHERE id=?", (cid,)).fetchone()[0]
     spec = json.dumps({**json.loads(spec), "target_country": "XX", "target_language": "zz", "price_segment": ""})
     keep = sqlite3.connect(db_copy).execute(
-        "SELECT creator_id FROM rankings WHERE campaign_id=? AND passed_hard_filter=1", (cid,)).fetchone()[0]
+        "SELECT creator_id FROM rankings WHERE campaign_id=? AND passed_hard_filter=1 AND creator_id LIKE 'yt:%'", (cid,)).fetchone()[0]
     _sql(db_copy, ("UPDATE campaigns SET spec_json=? WHERE id=?", (spec, cid)),
          ("DELETE FROM features WHERE campaign_id=? AND creator_id<>?", (cid, keep)))
     at = open_campaign(start(db_copy), cid)
@@ -367,3 +368,74 @@ def test_tiktok_manual_add_validates_the_link(db_copy):
     assert at.button(key="btn_cart").label == "Shortlist (1)"
     click(at, "btn_cart")
     assert "Known Creator" in text(at)
+
+
+# ------------------------------------------------------------------ shortlist → sponsorship → performance → history
+def test_full_sponsorship_lifecycle(db_copy):
+    import relationships as rel
+    cid = campaigns_with_results(db_copy)[0]
+    at = open_campaign(start(db_copy), cid)
+    creators = [k[len("sl_"):] for k in keys(at, "sl_")][:2]
+    assert len(creators) == 2, "needs two ranked creators"
+    first, second = creators
+    click(at, f"sl_{first}")
+    click(at, f"sl_{second}")
+    click(at, "btn_cart")
+    assert rel.shortlist_ids(cid) == [first, second]
+    # reorder + favorite (persisted, separate from the score)
+    click(at, f"slup_{second}")
+    assert rel.shortlist_ids(cid) == [second, first]
+    assert at.button(key=f"slup_{second}").disabled  # already on top
+    click(at, f"slfav_{first}")
+    assert at.button(key=f"slfav_{first}").label == "★"
+    at.segmented_control(key=f"_w_sl_order_{cid}").set_value("Favorites first").run()
+    assert keys(at, "slfav_")[0] == f"slfav_{first}"
+    # start sponsorship (confirmation dialog)
+    click(at, f"slsp_{first}")
+    click(at, "sp_confirm_yes")
+    assert not at.exception and at.session_state["view"] == "sponsorships"
+    sp = rel.sponsorships()[0]
+    assert (sp["creator_id"], sp["status"], sp["outcome"]) == (first, "in_progress", "neutral")
+    assert [m.label for m in at.metric] == ["Active sponsorships", "Completed sponsorships",
+                                            "Total sponsorship spend", "Total tracked revenue"]
+    assert at.metric[0].value == "1" and at.metric[2].value == "–"  # nothing recorded yet: no fake totals
+    # enter KPI data through the form
+    sid = sp["id"]
+    at.number_input(key=f"spf_{sid}_price").set_value(1200.0)
+    at.number_input(key=f"spf_{sid}_views").set_value(125000.0)
+    at.number_input(key=f"spf_{sid}_revenue").set_value(8900.0).run()
+    at.button(key=f"FormSubmitter:spf_form_{sid}-Save").click().run()
+    assert not at.exception
+    assert rel.kpis(sid) == {"views": 125000.0, "revenue": 8900.0} and rel.get(sid)["price_paid"] == 1200.0
+    assert "7.4×" in text(at)  # ROAS, deterministic
+    # finish + outcome
+    at.selectbox(key=f"sp_status_{sid}").set_value("done").run()
+    at.segmented_control(key=f"sp_outcome_{sid}").set_value("positive").run()
+    assert not at.exception
+    assert rel.get(sid)["status"] == "done" and rel.get(sid)["completed_at"]
+    h = rel.history(first)
+    assert (h.sponsorships, h.completed, h.positive, h.negative) == (1, 1, 1, 0)
+    # filters work together
+    at.segmented_control(key="_w_sp_f_status").set_value("in_progress").run()
+    assert "No sponsorships match these filters." in text(at)
+    at.segmented_control(key="_w_sp_f_status").set_value("done").run()
+    assert f"sp_status_{sid}" in [s.key for s in at.selectbox]
+    # history shows next to the score on the creator's analysis page, never inside it
+    open_campaign(at, cid)
+    assert "WORKED WITH PRENEW · 👍 1 👎 0" in text(at)
+    click(at, f"view_{first}")
+    t = text(at)
+    assert "Prenew relationship" in t and "Historical feedback: 👍 1 · 👎 0" in t and "7.4×" in t
+
+
+def test_cancelling_the_sponsorship_dialog_changes_nothing(db_copy):
+    import relationships as rel
+    cid = campaigns_with_results(db_copy)[0]
+    at = open_campaign(start(db_copy), cid)
+    first = keys(at, "sl_")[0][len("sl_"):]
+    click(at, f"sl_{first}")
+    click(at, "btn_cart")
+    click(at, f"slsp_{first}")
+    assert "Start a sponsorship with" in text(at)
+    click(at, "sp_confirm_no")
+    assert rel.sponsorships() == [] and "confirm_sp" not in at.session_state

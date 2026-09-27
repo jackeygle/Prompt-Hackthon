@@ -595,6 +595,13 @@ def confidence_badge(conf: float, label: str, show_pct: bool = True, basis: str 
             f'{text}{val}</span>')
 
 
+def history_badge(n: int, pos: int, neg: int) -> str:
+    """Prenew has sponsored this creator before (actual experience, not part of the score)."""
+    return (f'<span class="pn-badge" style="color:{T["accent"]};background:{T["accent_soft"]}" title="Prenew '
+            f'sponsored this creator {n}× · 👍 {pos} · 👎 {neg}. Shown next to the score, never inside it.">'
+            f'WORKED WITH PRENEW · 👍 {pos} 👎 {neg}</span>')
+
+
 def human_lead_badge() -> str:
     """TikTok leads: selected by a person after reviewing TikTok, never scored by the system."""
     return (f'<span class="pn-badge" style="color:{T["text_muted"]};background:{T["neutral_soft"]}" title="Chosen by '

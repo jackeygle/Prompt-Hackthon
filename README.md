@@ -95,6 +95,27 @@ marketer already knows can be added by pasting their profile link.
 - `ScoutProvider` is the seam for a future official, TikTok-approved integration; oEmbed stays disabled until
   Prenew confirms the commercial use is permitted.
 
+## Shortlist management and sponsorship tracking
+
+`relationships.py` (business logic) + the **Shortlist** and **Sponsorships** sections:
+Discovery → Ranking → Shortlist → Sponsorship → Performance → Historical creator relationship.
+
+- **Shortlist**: manual order (↑ / ↓, persisted as `shortlist.position`) and ☆/★ favorites (`shortlist.favorite`,
+  "Favorites first" view). Existing shortlists are migrated in place, in their old order.
+- **Start sponsorship** (with confirmation) creates a `sponsorships` record for the existing creator and campaign;
+  the creator stays on the shortlist. One active sponsorship per creator and campaign.
+- **Sponsorships** (header button): active / completed / spend / tracked revenue from stored data only; filters for
+  status, market, platform (only platforms with records) and name; per sponsorship: status (In progress / Done),
+  price paid (EUR), KPIs, notes, and one outcome (👍 positive / not rated / 👎 negative).
+- **KPIs** are optional, manually entered, one row per KPI in `sponsorship_kpis` (`rel.KPIS` registry: views,
+  clicks, referrals, conversions, revenue); derived metrics (cost per view / click / referral / conversion, ROAS)
+  are computed deterministically only when their inputs exist and the divisor is > 0.
+- **History** (👍/👎 totals, spend, revenue, historical ROAS) is always derived from the sponsorship records, never
+  stored as counters, so repeated clicks cannot inflate it. It is shown next to the campaign score (results card
+  badge, "Prenew relationship" panel on the analysis page), never mixed into AHP/TOPSIS.
+- Sponsorships are business records: deleting a campaign report keeps them (creator/platform/market/campaign are
+  snapshotted), which is also the data a future feedback loop into creator selection would learn from.
+
 ## Graceful degradation
 
 | Missing / failing | Behaviour |
