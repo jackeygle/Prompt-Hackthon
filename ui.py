@@ -595,6 +595,13 @@ def confidence_badge(conf: float, label: str, show_pct: bool = True, basis: str 
             f'{text}{val}</span>')
 
 
+def human_lead_badge() -> str:
+    """TikTok leads: selected by a person after reviewing TikTok, never scored by the system."""
+    return (f'<span class="pn-badge" style="color:{T["text_muted"]};background:{T["neutral_soft"]}" title="Chosen by '
+            f'you after reviewing it on TikTok. TikTok is not crawled or analysed, so there is no score.">'
+            f'HUMAN-SELECTED TIKTOK LEAD</span>')
+
+
 def gem_badge() -> str:
     return (f'<span class="pn-badge" style="color:{T["gem"]};background:{T["gem_soft"]}" title="Hidden gem: '
             f'campaign fit ≥ 75, campaign score at or above the median, and fewer subscribers than the median '

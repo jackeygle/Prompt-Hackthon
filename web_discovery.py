@@ -13,6 +13,7 @@ import json
 import logging
 import re
 from datetime import datetime, timezone
+from urllib.parse import unquote
 
 import requests
 
@@ -140,9 +141,12 @@ Answer with ONLY this JSON, no other text:
 
 
 def _response_text(data: dict) -> tuple[str, set[str]]:
-    """Output text + every URL the model cited (url_citation annotations)."""
+    """Output text + every URL the model cited (url_citation annotations) or the search actually retrieved
+    (web_search_call sources). JSON-only answers carry no annotations, so the retrieved sources are the evidence."""
     text, cited = [], set()
     for item in data.get("output", []):
+        if item.get("type") == "web_search_call":
+            cited |= {unquote(s.get("url") or "") for s in ((item.get("action") or {}).get("sources") or [])}
         for c in item.get("content", []) or []:
             if c.get("type") == "output_text":
                 text.append(c.get("text", ""))
@@ -179,14 +183,16 @@ def openai_web_search(prompt: str, via: str = "azure") -> tuple[dict, set[str]]:
     url, headers = _responses_endpoint(via)
     model = search_model(via)
     day = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    key = "oaws:" + hashlib.sha256(json.dumps([via, model, prompt, day]).encode()).hexdigest()
+    # "sources": entries cached before retrieved sources were stored would verify nothing
+    key = "oaws:" + hashlib.sha256(json.dumps([via, model, prompt, day, "sources"]).encode()).hexdigest()
     if (hit := db.cache_get(key)) is not None:
         return hit["data"], set(hit["cited"])
     last = ""
     for tool in ("web_search", "web_search_preview"):  # GA name first, older accounts/models use the preview name
         try:
             r = requests.post(url, timeout=180, headers=headers,
-                              json={"model": model, "tools": [{"type": tool}], "input": prompt})
+                              json={"model": model, "tools": [{"type": tool}], "input": prompt,
+                                    "include": ["web_search_call.action.sources"]})
         except requests.RequestException as e:
             raise WebDiscoveryError(f"{via} web search unreachable: {e}") from e
         OpenAISearchUsage.calls += 1
