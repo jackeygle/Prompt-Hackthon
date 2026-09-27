@@ -31,10 +31,6 @@ ui.inject_css()
 DEFAULT_BRIEF = "Find creators for €600–900 refurbished gaming PCs targeting gamers in Germany."  # demo example only
 BRIEF_EXAMPLES = ("e.g. “Gaming PCs under €800 for Fortnite and CS2 players in Sweden” or "
                   "“RTX 4070 PCs for streamers in Finland, creators with 20k–500k subscribers”")
-# one-click example briefs on the home search bar: (chip label, brief)
-BRIEF_CHIPS = [("Gaming PCs < €800 · Sweden", "Gaming PCs under €800 for Fortnite and CS2 players in Sweden"),
-               ("RTX 4070 PCs · Finland", "RTX 4070 PCs for streamers in Finland, creators with 20k–500k subscribers"),
-               ("Refurbished PCs · Germany", "Refurbished gaming PCs at €600–900 for budget-conscious gamers in Germany")]
 COUNTRY = {"DE": "Germany", "AT": "Austria", "CH": "Switzerland", "FR": "France", "NL": "Netherlands",
            "SE": "Sweden", "FI": "Finland", "DK": "Denmark", "NO": "Norway", "US": "United States",
            "GB": "United Kingdom", "UK": "United Kingdom", "ES": "Spain", "IT": "Italy", "PL": "Poland"}
@@ -152,6 +148,23 @@ def go(view: str, creator: str | None = None) -> None:
     ss.view = view
     if creator:
         ss.creator = creator
+    if view == "shortlist":
+        ss.sl_from = "discover"  # reached from the search's results (the cart); the global list sets its own
+
+
+def open_shortlist(campaign_id: str) -> None:
+    """Global Shortlists → one search's shortlist (the existing page, same controls)."""
+    ss.update(campaign=campaign_id, view="shortlist", creator=None, sl_from="shortlists")
+
+
+def open_sponsorships(campaign_id: str | None = None) -> None:
+    """Global Sponsorships, optionally narrowed to one search (the campaign filter, kept like any other filter)."""
+    ss["sp_f_campaign"] = campaign_id or "all"
+    ss.view = "sponsorships"
+
+
+def new_search() -> None:
+    ss.view = "new"
 
 
 def keep(store: str, default) -> dict:
@@ -324,34 +337,40 @@ def build_platform(platform: str, cid_c: str, gw: dict, stored: dict, creators: 
 
 # ------------------------------------------------------------------ chrome
 def top_nav(n_short: int, campaign: dict | None) -> None:
-    """Logo left, cart-style shortlist right; below it, on its own line above the page title, one back link to the
-    parent level (all campaigns, or the campaign). The current level is the title, so nothing is shown twice."""
-    inside = campaign is not None and ss.view not in ("campaign", "sponsorships")
-    left, right = st.columns([4.2, 2.2], vertical_alignment="center")
+    """Logo left; the product's global sections right (Shortlists, Sponsorships, plus the open search's shortlist);
+    below, one back link to the parent level. The current level is the page title, so nothing is shown twice."""
+    view = ss.view
+    inside = campaign is not None and view in ("discover", "analysis", "shortlist")
+    left, right = st.columns([3.6, 2.8], vertical_alignment="center")
     with left:
         html(ui.brand_header())
     with right, st.container(horizontal=True, horizontal_alignment="right", gap="small"):
-        with st.container(key="cart-on-sp" if ss.view == "sponsorships" else "cart-sp"):
-            st.button("Sponsorships", icon=":material/handshake:", key="btn_sponsorships", on_click=go,
-                      args=("sponsorships",))
-        if inside:
-            with st.container(key=(f"cart-on-{n_short}" if ss.view == "shortlist" else f"cart-{n_short}")):
+        with st.container(key="cart-on-sls" if view == "shortlists" else "cart-sls"):
+            st.button("Shortlists", icon=":material/bookmarks:", key="btn_shortlists", on_click=go,
+                      args=("shortlists",))
+        with st.container(key="cart-on-sp" if view == "sponsorships" else "cart-sp"):
+            st.button("Sponsorships", icon=":material/handshake:", key="btn_sponsorships", on_click=open_sponsorships)
+        if inside:  # this search's shortlist
+            with st.container(key=(f"cart-on-{n_short}" if view == "shortlist" else f"cart-{n_short}")):
                 st.button(f"Shortlist ({n_short})" if n_short else "Shortlist", icon=":material/bookmark:",
                           key="btn_cart", on_click=go, args=("shortlist",))
-    if ss.view == "sponsorships":
+    home = lambda: st.button("Home", key="crumb_home", type="tertiary", icon=":material/arrow_back:", on_click=go,
+                             args=("campaign",))
+    if view in ("shortlists", "sponsorships"):
         with st.container(key="back"):
-            st.button("All campaigns", key="crumb_home", type="tertiary", icon=":material/arrow_back:",
-                      on_click=go, args=("campaign",))
-    if inside:
+            home()
+    elif inside:
         with st.container(key="back"):
-            if ss.view in ("analysis", "shortlist"):
+            if view == "shortlist" and ss.get("sl_from") == "shortlists":
+                st.button("Shortlists", key="crumb_shortlists", type="tertiary", icon=":material/arrow_back:",
+                          on_click=go, args=("shortlists",))
+            elif view in ("analysis", "shortlist"):
                 spec = CampaignSpec.model_validate_json(campaign["spec_json"])
                 label = f"{spec.product} · {spec.target_country}"
                 st.button(label, key="crumb_campaign", type="tertiary", icon=":material/arrow_back:",
                           on_click=go, args=("discover",), help=f"Back to {label}")
             else:
-                st.button("All campaigns", key="crumb_home", type="tertiary", icon=":material/arrow_back:",
-                          on_click=go, args=("campaign",))
+                home()
 
 
 def band_title(title: str, chips: str = "", meta: str = "") -> None:
@@ -400,12 +419,13 @@ def _submit_brief() -> None:
         ss.brief_error = True
 
 
-def _use_example(brief: str) -> None:
-    ss["campaign_brief_v2"] = brief  # fills the search bar; the user still reviews and clicks Continue
-
-
 def _discard_draft() -> None:
     ss.pop("draft", None)
+
+
+def _leave_new_search() -> None:
+    ss.pop("draft", None)
+    ss.view = "campaign"
 
 
 def _submit_settings() -> None:
@@ -453,23 +473,21 @@ def campaign_page(campaigns: list[dict]) -> None:
                 miss = missing_keys(config.LLM_MODELS)
                 parse_error = f"Could not read the brief: {e}" + (f" (missing: {', '.join(miss)})" if miss else "")
         parse = None
-    # step 1 (describe) is the centered search home; steps 2-3 (confirm, discover) get a one-line band title and a
-    # single centered column, so the current task is the only thing on the page
-    slim = not running and not parse and ss.get("draft") is None
-    if slim:
-        with band:
-            html('<div class="pn-hero-slim pn-center"><div class="t">Find the creators our gamers already watch.</div>'
-                 '<div class="p">01 · Brief <span>→</span> 02 · Creators <span>→</span> 03 · Shortlist</div></div>')
-            form = st.container(key="briefbar")
-    else:
-        title = ("Finding creators…" if running else "Reading your brief…" if parse
-                 else "Confirm campaign details")
-        with band:
-            st.button("All campaigns", key="crumb_new", type="tertiary", icon=":material/arrow_back:",
-                      on_click=_discard_draft, disabled=bool(running or parse))
-            band_title(title, meta="Step 3 of 3 · this usually takes a few minutes" if running
-                       else "Step 2 of 3 · review what we understood, then create the campaign")
-        form = st.container(key="stepwrap")
+    # Home is an operational dashboard; a new search is its own 3-step flow with one task per page
+    if ss.view == "campaign" and not running and not parse:
+        home_page(campaigns)
+        return
+    has_draft = ss.get("draft") is not None
+    title = ("Finding creators…" if running else "Reading your brief…" if parse
+             else "Confirm campaign details" if has_draft else "New creator search")
+    meta = ("Step 3 of 3 · this usually takes a few minutes" if running
+            else "Step 2 of 3 · review what we understood, then create the campaign" if has_draft
+            else "Step 1 of 3 · describe the campaign; we research the audience and plan the search")
+    with band:
+        st.button("Home", key="crumb_new", type="tertiary", icon=":material/arrow_back:",
+                  on_click=_leave_new_search, disabled=bool(running or parse))
+        band_title(title, meta=meta)
+    form = st.container(key="stepwrap")
     with form:
         with st.container(key="panel-campaign"):
             if parse_error:
@@ -482,38 +500,18 @@ def campaign_page(campaigns: list[dict]) -> None:
                     st.error(f"Discovery failed: {e}")
                 return
             if ss.get("draft") is None:
-                if slim:  # search-bar style: one input + button in a row, examples as a quiet line below
-                    with st.form("brief_form", border=False):
-                        inp, go_col = st.columns([6, 1.25], vertical_alignment="center", gap="small")
-                        inp.text_area("Campaign brief", height=68, label_visibility="collapsed",
-                                      placeholder="Describe your campaign…",
-                                      key="campaign_brief_v2")
-                        with go_col:
-                            st.form_submit_button("Continue →", type="primary", width="stretch",
-                                                  on_click=_submit_brief)
-                        if ss.pop("brief_error", False):
-                            st.warning("Describe your campaign before continuing.")
-                    with st.container(key="briefchips", horizontal=True, horizontal_alignment="center",
-                                      gap="small"):
-                        html('<span class="pn-brief-ex">Try:</span>')
-                        for i, (label, brief) in enumerate(BRIEF_CHIPS):
-                            st.button(label, key=f"ex_{i}", on_click=_use_example, args=(brief,),
-                                      help=brief)
-                else:
-                    html(ui.steps(0) + '<div class="pn-kicker">Campaign brief</div>')
-                    with st.form("brief_form", border=False):
-                        st.text_area("Campaign brief", value="", height=150, placeholder="Describe your campaign…",
-                                     label_visibility="collapsed", key="campaign_brief_v2")
-                        if ss.pop("brief_error", False):
-                            st.warning("Describe your campaign before continuing.")
-                        html(f'<div class="pn-subtle" style="margin:-4px 0 12px">{esc(BRIEF_EXAMPLES)}</div>')
-                        st.form_submit_button("Continue →", type="primary", width="stretch",
-                                              on_click=_submit_brief)
+                html(ui.steps(0) + '<div class="pn-kicker">Campaign brief</div>')
+                with st.form("brief_form", border=False):
+                    st.text_area("Campaign brief", value="", height=150, placeholder="Describe your campaign…",
+                                 label_visibility="collapsed", key="campaign_brief_v2")
+                    if ss.pop("brief_error", False):
+                        st.warning("Describe your campaign before continuing.")
+                    html(f'<div class="pn-subtle" style="margin:-4px 0 12px">{esc(BRIEF_EXAMPLES)}</div>')
+                    st.form_submit_button("Continue →", type="primary", width="stretch",
+                                          on_click=_submit_brief)
             else:
                 html(ui.steps(1))
                 campaign_form(ss.draft)
-    if slim:
-        recent_campaigns(campaigns, overlap=True)
 
 
 def campaign_form(draft: CampaignSpec) -> None:
@@ -591,6 +589,121 @@ def rel_time(iso: str) -> str:
     return f"{days} days ago" if days < 7 else f"{t:%d %b %Y}"
 
 
+def home_page(campaigns: list[dict]) -> None:
+    """Operational home: start a search, jump into Shortlists / Sponsorships (live counts), continue recent work."""
+    with band:
+        top, cta = st.columns([4, 1.4], vertical_alignment="bottom")
+        with top:
+            band_title("Creator Intelligence", meta="Find, evaluate and manage creator partnerships.")
+        with cta, st.container(key="home-cta"):
+            st.button("New creator search", icon=":material/add:", type="primary", key="btn_new_search",
+                      on_click=new_search, width="stretch")
+    groups = rel.shortlist_groups()
+    n_sl, n_fav = sum(g["n"] for g in groups.values()), sum(g["favorites"] for g in groups.values())
+    tot = rel.summary(rel.sponsorships())
+    sl_col, sp_col = st.columns(2, gap="medium")
+    with sl_col, st.container(key="panel-home-sl"):
+        html('<div class="pn-kicker">Shortlists</div><div class="pn-muted">Review creators saved from previous '
+             'searches.</div>')
+        if n_sl:
+            html(f'<div class="pn-home-num"><b>{n_sl}</b> creator{"s" if n_sl != 1 else ""} · <b>{len(groups)}</b> '
+                 f'search{"es" if len(groups) != 1 else ""}{f" · ★ {n_fav}" if n_fav else ""}</div>')
+            st.button("Open shortlists", key="home_sl", on_click=go, args=("shortlists",), icon=":material/bookmarks:")
+        else:
+            html('<div class="pn-home-num pn-home-empty">No shortlisted creators yet</div>')
+            st.button("Find creators", key="home_sl_find", on_click=new_search, icon=":material/search:")
+    with sp_col, st.container(key="panel-home-sp"):
+        html('<div class="pn-kicker">Sponsorships</div><div class="pn-muted">Track active partnerships and what '
+             'they delivered.</div>')
+        if tot["active"] or tot["completed"]:
+            money_line = " · ".join(x for x in [f"{money(tot['spend'])} spent" if tot["spend"] is not None else "",
+                                                 f"{money(tot['revenue'])} tracked revenue"
+                                                 if tot["revenue"] is not None else ""] if x)
+            html(f'<div class="pn-home-num"><b>{tot["active"]}</b> in progress · <b>{tot["completed"]}</b> done'
+                 f'{" · " + money_line if money_line else ""}</div>')
+            st.button("Open sponsorships", key="home_sp", on_click=open_sponsorships, icon=":material/handshake:")
+        else:
+            html('<div class="pn-home-num pn-home-empty">No sponsorships yet</div>')
+            st.button("View shortlists", key="home_sp_sl", on_click=go, args=("shortlists",),
+                      icon=":material/bookmarks:", disabled=not n_sl)
+    st.write("")
+    recent_campaigns(campaigns)
+
+
+def shortlists_page(campaigns: list[dict]) -> None:
+    """Every search's shortlist in one place, grouped by the search that produced it (existing shortlist table)."""
+    groups = rel.shortlist_groups()
+    by_id = {c["id"]: c for c in campaigns}
+    groups = {k: g for k, g in groups.items() if k in by_id}
+    n = sum(g["n"] for g in groups.values())
+    with band:
+        band_title("Shortlists", meta=(f"{n} creator{'s' if n != 1 else ''} across {len(groups)} "
+                                       f"search{'es' if len(groups) != 1 else ''}") if n else "")
+    if not groups:
+        ui.empty_state("No shortlisted creators yet", "Discover creators and add promising candidates to your "
+                                                      "shortlist.")
+        st.button("Find creators", key="sls_find", type="primary", on_click=new_search, icon=":material/search:")
+        return
+    f1, f2 = st.columns([1.6, 3], vertical_alignment="bottom")
+    mode = f1.segmented_control("View", ["By search", "All creators"], required=True, label_visibility="collapsed",
+                                **keep("sls_mode", "By search"))
+    query = f2.text_input("Search", placeholder="Search searches or creators", label_visibility="collapsed",
+                          **keep("sls_query", ""))
+    q = query.lower().strip()
+    order = [c["id"] for c in campaigns if c["id"] in groups]  # newest search first
+    specs = {cid: CampaignSpec.model_validate_json(by_id[cid]["spec_json"]) for cid in order}
+    names = {r["id"]: r["name"] for r in db.query("SELECT id, name FROM creators")}
+
+    def label_of(camp: str, cid: str) -> str:
+        if cid.startswith(tts.PREFIX):
+            L = tts.lead(camp, cid[len(tts.PREFIX):]) or {}
+            return L.get("name") or "@" + cid[len(tts.PREFIX):]
+        return names.get(cid, cid)
+
+    st.write("")
+    if mode == "All creators":
+        scores = {(r["campaign_id"], r["creator_id"]): r["topsis_score"] for r in
+                  db.query("SELECT campaign_id, creator_id, topsis_score FROM rankings")}
+        status = {(r["campaign_id"], r["creator_id"]): rel.STATUSES[r["status"]]
+                  for r in reversed(rel.sponsorships())}
+        rows = []
+        for camp in order:
+            for e in rel.shortlist(camp):
+                cid, sc = e["creator_id"], scores.get((camp, e["creator_id"]))
+                rows.append({"★": "★" if e["favorite"] else "", "Creator": label_of(camp, cid),
+                             "Platform": PLATFORMS.get(rel.platform_of(cid), ""), "Search": specs[camp].product,
+                             "Market": specs[camp].target_country,
+                             "Score in this search": None if sc is None else round(100 * sc),
+                             "Sponsorship": status.get((camp, cid), "")})
+        if q:
+            rows = [r for r in rows if q in r["Creator"].lower() or q in r["Search"].lower()]
+        st.dataframe(pd.DataFrame(rows), hide_index=True, width="stretch",
+                     column_config={"Score in this search": st.column_config.NumberColumn(
+                         format="%d", help="Campaign score from that search's ranking (search-specific; TikTok "
+                                           "leads have none)")})
+        st.caption("A creator shortlisted in two searches appears twice: each search keeps its own score and state.")
+        return
+    shown = [c for c in order if not q or q in specs[c].product.lower() or q in (by_id[c]["brief"] or "").lower()
+             or any(q in label_of(c, x).lower() for x in groups[c]["creators"])]
+    if not shown:
+        ui.empty_state("No shortlists match this search.", "Clear the search to see all.")
+    for i in range(0, len(shown), 2):
+        for col, camp in zip(st.columns(2, gap="medium"), shown[i:i + 2]):
+            g, spec = groups[camp], specs[camp]
+            with col, st.container(key=f"card-slg-{ui.key(camp)}"):
+                icons = " ".join(ui.platform_icon(p, 14) for p in g["platforms"])
+                fav = f" · ★ {g['favorites']}" if g["favorites"] else ""
+                who = ", ".join(label_of(camp, x) for x in g["creators"][:4])
+                more = f" +{g['n'] - 4} more" if g["n"] > 4 else ""
+                html(f'<div class="pn-rank">{esc(rel_time(by_id[camp]["created_at"]))} · '
+                     f'{esc(COUNTRY.get(spec.target_country, spec.target_country))} · {esc(PRIORITY[spec.goal][0])}</div>'
+                     f'<div class="pn-group-name">{esc(spec.product)}</div>'
+                     f'<div class="pn-home-num"><b>{g["n"]}</b> shortlisted{fav}<span class="pn-group-icons">{icons}'
+                     f'</span></div><div class="pn-subtle" style="margin:4px 0 10px">{esc(who)}{more}</div>')
+                st.button("Open shortlist", key=f"open_sl_{camp}", on_click=open_shortlist, args=(camp,),
+                          icon=":material/arrow_forward:", icon_position="right")
+
+
 def recent_campaigns(campaigns: list[dict], n_cols: int = 3, overlap: bool = False) -> None:
     """Report history as a compact list: identity, key settings, size, age; open and delete per row."""
     if not campaigns:
@@ -603,9 +716,11 @@ def recent_campaigns(campaigns: list[dict], n_cols: int = 3, overlap: bool = Fal
     shown = campaigns if ss.get("show_empty_reports") else [c for c in campaigns if counts[c["id"]]]
     # only the search-style home lifts the card over the band; elsewhere it must not cover the form above
     home = st.container(key="homecard" if overlap else "histcard")
-    home.markdown(f'<div class="pn-list-head"><span class="t">Recent campaigns</span>'
-                  f'<span class="n">{len(shown)} report{"s" if len(shown) != 1 else ""}</span></div>',
+    home.markdown(f'<div class="pn-list-head"><span class="t">Recent searches</span>'
+                  f'<span class="n">{len(shown)} search{"es" if len(shown) != 1 else ""}</span></div>',
                   unsafe_allow_html=True)
+    groups = rel.shortlist_groups()
+    sp_groups = rel.sponsorship_groups(rel.sponsorships())
     with home, st.container(key="reportlist"):
         for c in shown:
             spec = CampaignSpec.model_validate_json(c["spec_json"])
@@ -618,7 +733,12 @@ def recent_campaigns(campaigns: list[dict], n_cols: int = 3, overlap: bool = Fal
                 html(f'<div class="pn-row-main"><div class="nm">{esc(spec.product)}</div>'
                      f'<div class="br">{esc(brief) if brief else "&nbsp;"}</div></div>')
                 html(f'<div class="pn-row-spec">{esc(specs)}</div>')
-                html(f'<div class="pn-row-num"><b>{n}</b> creator{"s" if n != 1 else ""}</div>')
+                g, sg = groups.get(c["id"], {}), sp_groups.get(c["id"], {})
+                sponsored = (f'<b>{sg["active"] + sg["completed"]}</b> sponsored' if sg else
+                             '<span class="pn-row-none">no sponsorships</span>')
+                html(f'<div class="pn-row-num" title="Creators the ranking found"><b>{n}</b> found</div>')
+                html(f'<div class="pn-row-num" title="Creators you shortlisted"><b>{g.get("n", 0)}</b> shortlisted</div>')
+                html(f'<div class="pn-row-num pn-row-sp" title="Sponsorships started from this search">{sponsored}</div>')
                 html(f'<div class="pn-row-time">{esc(rel_time(c["created_at"]))}</div>')
                 st.button("Open", key=f"open_{c['id']}", type="tertiary", icon=":material/arrow_forward:",
                           icon_position="right", on_click=lambda i=c["id"]: (
@@ -1300,15 +1420,18 @@ def confirm_sponsorship(campaign_id: str, cid: str, name: str, platform: str, sp
         rel.start_sponsorship(campaign_id, cid, creator_name=name, platform=platform, country=spec.target_country,
                               campaign_label=f"{spec.product} · {COUNTRY.get(spec.target_country, spec.target_country)}")
         ss.toast = (f"Sponsorship with {name} started", ":material/handshake:")
-        ss.view = "sponsorships"
+        open_sponsorships(campaign_id)
         st.rerun()
 
 
 def shortlist_page(ctx: dict, short: list[str]) -> None:
     with band:
         spec = ctx["spec"]
-        band_title("Shortlist", "", f"{len(short)} creator{'s' if len(short) != 1 else ''} for {spec.product} · "
-                                    f"{COUNTRY.get(spec.target_country, spec.target_country)}")
+        band_title("Shortlist", "".join(ui.chip(x) for x in [spec.product,
+                                                              COUNTRY.get(spec.target_country, spec.target_country),
+                                                              PRIORITY[spec.goal][0]]),
+                   f"{len(short)} creator{'s' if len(short) != 1 else ''} · search run "
+                   f"{rel_time(ctx['campaign']['created_at'])}")
     if not short:
         ui.empty_state("Your shortlist is empty.", "Go back to the campaign and add creators with “+ Shortlist”.")
         return
@@ -1387,7 +1510,7 @@ def shortlist_page(ctx: dict, short: list[str]) -> None:
             sp = sponsored.get(cid)
             if sp and sp["status"] == "in_progress":
                 c.button("In sponsorship", key=f"slsp_{cid}", icon=":material/handshake:", width="stretch",
-                         on_click=go, args=("sponsorships",), help="Open the Sponsorships section")
+                         on_click=open_sponsorships, args=(camp,), help="Open this search's sponsorships")
             else:
                 c.button("Start sponsorship" if not sp else "New sponsorship", key=f"slsp_{cid}",
                          icon=":material/handshake:", width="stretch", on_click=_ask_sponsorship,
@@ -1497,19 +1620,32 @@ def sponsorship_card(r: dict) -> None:
                     html(f'<div class="pn-note" style="margin-top:8px">{esc(r["notes"])}</div>')
 
 
-def sponsorships_page() -> None:
-    with band:
-        band_title("Sponsorships", "", "Creators Prenew decided to work with, and what they delivered.")
+def sponsorships_page(campaigns: list[dict]) -> None:
+    """All sponsorships, filterable across searches but always grouped by the search they came from."""
     rows = rel.sponsorships()
+    live = {c["id"] for c in campaigns}
+    groups = rel.sponsorship_groups(rows)
+    camp = ss.get("sp_f_campaign", "all")
+    in_one = camp != "all" and camp in groups
+    with band:
+        band_title(groups[camp]["label"] if in_one else "Sponsorships",
+                   meta="Sponsorships from this search" if in_one
+                   else "Creators Prenew decided to work with, and what they delivered.")
     if not rows:
-        ui.empty_state("No sponsorships yet.", "Start one from a campaign shortlist with “Start sponsorship”.")
+        ui.empty_state("No sponsorships yet", "Move a shortlisted creator into Sponsorships when Prenew begins "
+                                              "working with them.")
+        st.button("View shortlists", key="sp_empty_sl", type="primary", on_click=go, args=("shortlists",),
+                  icon=":material/bookmarks:")
         return
-    tot = rel.summary(rows)
+    tot = rel.summary(groups[camp]["rows"] if in_one else rows)
     for col, (label, value) in zip(st.columns(4), [
             ("Active sponsorships", tot["active"]), ("Completed sponsorships", tot["completed"]),
             ("Total sponsorship spend", money(tot["spend"])), ("Total tracked revenue", money(tot["revenue"]))]):
         col.metric(label, value, border=True)
-    f1, f2, f3, f4 = st.columns([1.6, 1.2, 1.2, 1.8], vertical_alignment="bottom")
+    f0, f1, f2, f3, f4 = st.columns([1.7, 1.5, 1.1, 1.1, 1.5], vertical_alignment="bottom")
+    order = list(groups)  # newest sponsorship first
+    camp = f0.selectbox("Search", ["all", *order], format_func=lambda c: "All searches" if c == "all"
+                        else groups[c]["label"], **keep("sp_f_campaign", "all"))
     status = f1.segmented_control("Status", ["all", *rel.STATUSES], required=True, label_visibility="collapsed",
                                   format_func=lambda s_: "All" if s_ == "all" else rel.STATUSES[s_],
                                   **keep("sp_f_status", "all"))
@@ -1520,16 +1656,33 @@ def sponsorships_page() -> None:
     plat = f3.selectbox("Platform", ["all", *plats], format_func=lambda p: "All platforms" if p == "all"
                         else PLATFORMS[p], **keep("sp_f_platform", "all"))
     query = f4.text_input("Search creators", placeholder="Search creators", **keep("sp_f_query", ""))
-    shown = [r for r in rows if (status == "all" or r["status"] == status)
-             and (market == "all" or r["country"] == market) and (plat == "all" or r["platform"] == plat)
-             and (not query or query.lower() in (r["creator_name"] or "").lower())]
+    match = lambda r: ((camp == "all" or r["campaign_id"] == camp) and (status == "all" or r["status"] == status)
+                       and (market == "all" or r["country"] == market) and (plat == "all" or r["platform"] == plat)
+                       and (not query or query.lower() in (r["creator_name"] or "").lower()))
     st.write("")
+    shown = {c: [r for r in g["rows"] if match(r)] for c, g in groups.items()}
+    shown = {c: rs for c, rs in shown.items() if rs}
     if not shown:
         ui.empty_state("No sponsorships match these filters.", "Clear a filter to see more.")
-    for i in range(0, len(shown), 2):
-        for col, r in zip(st.columns(2, gap="medium"), shown[i:i + 2]):
-            with col:
-                sponsorship_card(r)
+    for c, rs in shown.items():
+        g = groups[c]
+        with st.container(key=f"sp-group-{ui.key(c)}"):
+            head, act = st.columns([4, 1.3], vertical_alignment="center")
+            n_all = g["active"] + g["completed"]
+            spend = f" · {money(g['spend'])} spent" if g["spend"] is not None else ""
+            gone = "" if c in live else ' <span class="pn-chip">report deleted</span>'
+            head.markdown(f'<div class="pn-group-name">{esc(g["label"])}{gone}</div><div class="pn-subtle">'
+                          f'{n_all} sponsorship{"s" if n_all != 1 else ""} · {g["active"]} in progress · '
+                          f'{g["completed"]} done{spend}</div>', unsafe_allow_html=True)
+            if c in live:
+                act.button("Open search", key=f"sp_open_{c}", type="tertiary", icon=":material/arrow_forward:",
+                           icon_position="right", on_click=lambda i=c: ss.update(campaign=i, view="discover",
+                                                                                   creator=None))
+        for i in range(0, len(rs), 2):
+            for col, r in zip(st.columns(2, gap="medium"), rs[i:i + 2]):
+                with col:
+                    sponsorship_card(r)
+        st.write("")
 
 
 # ------------------------------------------------------------------ router
@@ -1547,8 +1700,10 @@ with band:
     top_nav(len(short), current)
 
 if ss.view == "sponsorships":
-    sponsorships_page()
-elif ss.view == "campaign" or current is None:
+    sponsorships_page(campaigns)
+elif ss.view == "shortlists":
+    shortlists_page(campaigns)
+elif ss.view in ("campaign", "new") or current is None:
     campaign_page(campaigns)
 else:
     ctx = build_context(current)

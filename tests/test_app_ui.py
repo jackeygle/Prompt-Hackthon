@@ -25,6 +25,12 @@ BADGE = re.compile(r"(HIGH|MEDIUM) CONFIDENCE · (\d+) VIDEOS? · (\d+) COMMENTS
 def db_copy(tmp_path, monkeypatch):
     path = tmp_path / "ui.db"
     shutil.copy(SNAPSHOT, path)
+    conn = sqlite3.connect(path)  # start from the ranked searches only, not whatever a marketer already saved
+    for table in ("shortlist", "sponsorships", "sponsorship_kpis", "tiktok_leads"):
+        if conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (table,)).fetchone():
+            conn.execute(f"DELETE FROM {table}")
+    conn.commit()
+    conn.close()
     monkeypatch.setattr(config, "DB_PATH", path)
     db.use(path)
     yield path
@@ -308,6 +314,8 @@ def test_create_campaign_flow_passes_budget(db_copy, monkeypatch):
     monkeypatch.setattr(pipeline, "run_campaign", fake_run)
 
     at = start(db_copy)
+    assert not at.text_area  # home is a dashboard: the brief lives in the New creator search flow
+    click(at, "btn_new_search")
     at.text_area(key="campaign_brief_v2").set_value("Gaming PCs under €800 in Germany").run()
     at.button(key="FormSubmitter:brief_form-Continue →").click().run()
     assert not at.exception, [e.value for e in at.exception]
@@ -439,3 +447,99 @@ def test_cancelling_the_sponsorship_dialog_changes_nothing(db_copy):
     assert "Start a sponsorship with" in text(at)
     click(at, "sp_confirm_no")
     assert rel.sponsorships() == [] and "confirm_sp" not in at.session_state
+
+
+# ------------------------------------------------------------------ global Shortlists / Sponsorships, grouped by search
+def test_global_sections_grouped_by_search_survive_restart(db_copy, monkeypatch):
+    import pipeline
+    import relationships as rel
+    from models import CampaignSpec
+    A, B = campaigns_with_results(db_copy)[:2]
+    n_creators = sqlite3.connect(db_copy).execute("SELECT COUNT(*) FROM creators").fetchone()[0]
+    at = start(db_copy)
+    assert "No shortlisted creators yet" in text(at) and "No sponsorships yet" in text(at)  # honest empty home
+    # Search A: shortlist two creators; Search B: one (the same creator as A's first)
+    open_campaign(at, A)
+    a1, a2 = [k[len("sl_"):] for k in keys(at, "sl_")][:2]
+    shared = a1
+    conn = sqlite3.connect(db_copy)  # search B also found this creator, with its own features and score
+    conn.execute("INSERT OR REPLACE INTO features SELECT ?, creator_id, name, value, method, n_samples FROM features "
+                 "WHERE campaign_id=? AND creator_id=?", (B, A, shared))
+    conn.execute("INSERT OR REPLACE INTO rankings SELECT ?, creator_id, 99, 0.123, confidence, 1, filter_reason, "
+                 "breakdown_json FROM rankings WHERE campaign_id=? AND creator_id=?", (B, A, shared))
+    conn.commit()
+    conn.close()
+    click(at, f"sl_{a1}")
+    click(at, f"sl_{a2}")
+    open_campaign(at, B)
+    click(at, f"sl_{shared}")
+    # Home -> Shortlists, grouped by search
+    click(at, "crumb_home")
+    assert "<b>3</b> creators · <b>2</b> searches" in text(at)
+    click(at, "btn_shortlists")
+    cards = {m.value.split('pn-group-name">')[1].split("<")[0]: m.value for m in at.markdown if 'class="pn-group-name"' in m.value}
+    assert len(cards) == 2
+    assert sorted(v.split("<b>")[1].split("</b>")[0] for v in cards.values()) == ["1", "2"]
+    # All creators: the shared creator appears once per search, each with its own score
+    at.segmented_control(key="_w_sls_mode").set_value("All creators").run()
+    df = at.dataframe[0].value
+    shared_rows = df[df["Creator"] == df[df["Search"] == df["Search"].iloc[0]]["Creator"].iloc[0]]
+    assert len(df) == 3 and len(shared_rows) == 2 and shared_rows["Score in this search"].nunique() == 2
+    # open A's shortlist from the global list; reorder + favorite; back link returns to Shortlists
+    at.segmented_control(key="_w_sls_mode").set_value("By search").run()
+    click(at, f"open_sl_{A}")
+    assert at.session_state["view"] == "shortlist" and keys(at, "crumb_shortlists")
+    click(at, f"slup_{a2}")
+    click(at, f"slfav_{a1}")
+    click(at, f"slsp_{a1}")
+    click(at, "sp_confirm_yes")
+    # Sponsorships opens on this search, grouped, provenance kept
+    assert at.session_state["view"] == "sponsorships" and at.session_state["sp_f_campaign"] == A
+    sp = rel.sponsorships()[0]
+    assert (sp["campaign_id"], sp["creator_id"], sp["platform"]) == (A, a1, "youtube")
+    rel.update_performance(sp["id"], 1000, {"views": 50000})
+    rel.set_status(sp["id"], "done")
+    # Search C is created: A and B stay intact
+    spec = CampaignSpec.model_validate_json(sqlite3.connect(db_copy).execute(
+        "SELECT spec_json FROM campaigns WHERE id=?", (A,)).fetchone()[0])
+    monkeypatch.setattr(pipeline, "parse_brief", lambda llm, brief: spec.model_copy(update={"n_creators": 10}))
+
+    def fake_run(brief, spec=None, seed_handles=(), progress=None):
+        import db
+        db.execute("INSERT INTO campaigns VALUES ('c_search_c', 'search C', ?, ?)", (spec.model_dump_json(), db.now()))
+        return "c_search_c"
+    monkeypatch.setattr(pipeline, "run_campaign", fake_run)
+    click(at, "crumb_home")
+    click(at, "btn_new_search")
+    at.text_area(key="campaign_brief_v2").set_value("Search C").run()
+    at.button(key="FormSubmitter:brief_form-Continue →").click().run()
+    at.button(key="FormSubmitter:settings_form-Create campaign →").click().run()
+    assert not at.exception, [e.value for e in at.exception]
+
+    # restart: a fresh app session on the same database
+    at = start(db_copy)
+    assert rel.shortlist_ids(A) == [a2, a1] and rel.shortlist_ids(B) == [shared]
+    assert rel.shortlist(A)[1]["favorite"] == 1
+    assert "<b>3</b> creators · <b>2</b> searches" in text(at)
+    assert "<b>0</b> in progress · <b>1</b> done" in text(at)
+    click(at, "btn_sponsorships")
+    assert at.session_state["sp_f_campaign"] == "all"
+    assert rel.get(sp["id"])["status"] == "done" and rel.kpis(sp["id"]) == {"views": 50000.0}
+    # filters work together and keep the search grouping
+    at.selectbox(key="_w_sp_f_platform").set_value("youtube").run()
+    at.segmented_control(key="_w_sp_f_status").set_value("done").run()
+    assert [k for k in (c.key for c in at.button) if k and k.startswith("sp_open_")] == [f"sp_open_{A}"]
+    at.segmented_control(key="_w_sp_f_status").set_value("in_progress").run()
+    assert "No sponsorships match these filters." in text(at)
+    # no creator records were created or duplicated along the way
+    assert sqlite3.connect(db_copy).execute("SELECT COUNT(*) FROM creators").fetchone()[0] == n_creators
+
+
+def test_every_new_page_has_a_way_back(db_copy):
+    at = start(db_copy)
+    for nav, back in [("btn_shortlists", "crumb_home"), ("btn_sponsorships", "crumb_home"),
+                      ("btn_new_search", "crumb_new")]:
+        click(at, nav)
+        assert keys(at, back), nav
+        click(at, back)
+        assert at.session_state["view"] == "campaign"

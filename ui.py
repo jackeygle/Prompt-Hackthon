@@ -338,6 +338,17 @@ div[class*="st-key-band"] div[class*="st-key-panel-campaign"] .pn-subtle {{ colo
 .stFormSubmitButton > button[kind^="primary"] p, .stButton > button[kind^="primary"] p {{ font-weight:700; }}
 .stFormSubmitButton > button[kind^="primary"], .stButton > button[kind^="primary"] {{
   box-shadow:inset 0 -2px 0 rgba(37,111,80,.35); }}
+/* home: product sections with live counts; group cards on Shortlists / Sponsorships */
+.pn-home-num {{ font-size:.95rem; color:{T['text_muted']}; margin:10px 0 12px; }}
+.pn-home-num b {{ font-family:var(--pn-mono); color:var(--pn-navy); font-size:1.15rem; }}
+.pn-home-empty {{ color:{T['text_subtle']}; }}
+.pn-group-name {{ font-family:'Sora',sans-serif; font-weight:700; font-size:1.1rem; color:var(--pn-navy); margin:2px 0 4px; }}
+.pn-group-icons {{ margin-left:10px; display:inline-flex; gap:6px; vertical-align:middle; }}
+.pn-row-none {{ color:{T['text_subtle']}; font-size:.78rem; }}
+div[class*="st-key-reportlist"] .pn-row-num {{ width:96px; white-space:nowrap; }}
+div[class*="st-key-reportlist"] .pn-row-sp {{ width:118px; }}
+div[class*="st-key-sp-group-"] {{ border-bottom:1px solid {T['border']}; padding-bottom:6px; margin-bottom:10px; }}
+div[class*="st-key-home-cta"] button {{ min-height:48px; }}
 /* report history: compact list, one row per report */
 .pn-list-head {{ display:flex; align-items:baseline; gap:12px; margin:6px 0 10px; }}
 .pn-list-head .t {{ font-family:'Sora',sans-serif; font-weight:700; font-size:1.3rem; color:var(--pn-navy); }}
