@@ -16,6 +16,7 @@ import config
 import db
 import pipeline
 import ranking
+import relationships as rel
 import ui
 import tiktok_scout as tts
 import web_discovery as web
@@ -125,8 +126,7 @@ ss.setdefault("view", "campaign")
 # ------------------------------------------------------------------ data access
 def open_db() -> None:
     db.use(config.DB_PATH)
-    db.execute("CREATE TABLE IF NOT EXISTS shortlist (campaign_id TEXT, creator_id TEXT, added_at TEXT, "
-               "PRIMARY KEY (campaign_id, creator_id))")
+    rel.ensure_schema()  # shortlist (+ position, favorite), sponsorships, sponsorship KPIs
 
 
 def list_campaigns() -> list[dict]:
@@ -134,18 +134,17 @@ def list_campaigns() -> list[dict]:
 
 
 def shortlist_ids(campaign_id: str) -> list[str]:
-    return [r["creator_id"] for r in db.query(
-        "SELECT creator_id FROM shortlist WHERE campaign_id=? ORDER BY added_at", (campaign_id,))]
+    return rel.shortlist_ids(campaign_id)  # the marketer's manual order
 
 
 def toggle_shortlist(campaign_id: str, cid: str) -> None:
     name = ("@" + cid[len(tts.PREFIX):] if cid.startswith(tts.PREFIX) else
             (db.query("SELECT name FROM creators WHERE id=?", (cid,)) or [{"name": "Creator"}])[0]["name"])
     if cid in shortlist_ids(campaign_id):
-        db.execute("DELETE FROM shortlist WHERE campaign_id=? AND creator_id=?", (campaign_id, cid))
+        rel.remove_from_shortlist(campaign_id, cid)
         ss.toast = (f"Removed {name} from the shortlist", ":material/bookmark_remove:")
     else:
-        db.execute("INSERT OR IGNORE INTO shortlist VALUES (?,?,?)", (campaign_id, cid, db.now()))
+        rel.add_to_shortlist(campaign_id, cid)
         ss.toast = (f"Added {name} to the shortlist", ":material/bookmark_added:")
 
 
@@ -327,15 +326,23 @@ def build_platform(platform: str, cid_c: str, gw: dict, stored: dict, creators: 
 def top_nav(n_short: int, campaign: dict | None) -> None:
     """Logo left, cart-style shortlist right; below it, on its own line above the page title, one back link to the
     parent level (all campaigns, or the campaign). The current level is the title, so nothing is shown twice."""
-    inside = campaign is not None and ss.view != "campaign"
-    left, right = st.columns([5, 1.2], vertical_alignment="center")
+    inside = campaign is not None and ss.view not in ("campaign", "sponsorships")
+    left, right = st.columns([4.2, 2.2], vertical_alignment="center")
     with left:
         html(ui.brand_header())
+    with right, st.container(horizontal=True, horizontal_alignment="right", gap="small"):
+        with st.container(key="cart-on-sp" if ss.view == "sponsorships" else "cart-sp"):
+            st.button("Sponsorships", icon=":material/handshake:", key="btn_sponsorships", on_click=go,
+                      args=("sponsorships",))
+        if inside:
+            with st.container(key=(f"cart-on-{n_short}" if ss.view == "shortlist" else f"cart-{n_short}")):
+                st.button(f"Shortlist ({n_short})" if n_short else "Shortlist", icon=":material/bookmark:",
+                          key="btn_cart", on_click=go, args=("shortlist",))
+    if ss.view == "sponsorships":
+        with st.container(key="back"):
+            st.button("All campaigns", key="crumb_home", type="tertiary", icon=":material/arrow_back:",
+                      on_click=go, args=("campaign",))
     if inside:
-        with right, st.container(horizontal=True, horizontal_alignment="right",
-                                 key=(f"cart-on-{n_short}" if ss.view == "shortlist" else f"cart-{n_short}")):
-            st.button(f"Shortlist ({n_short})" if n_short else "Shortlist", icon=":material/bookmark:",
-                      key="btn_cart", on_click=go, args=("shortlist",))
         with st.container(key="back"):
             if ss.view in ("analysis", "shortlist"):
                 spec = CampaignSpec.model_validate_json(campaign["spec_json"])
@@ -627,7 +634,7 @@ def recent_campaigns(campaigns: list[dict], n_cols: int = 3, overlap: bool = Fal
 @st.dialog("Delete this report?")
 def confirm_delete(campaign_id: str, product: str) -> None:
     st.write(f'This will permanently remove the saved report for “{product}”.')
-    st.caption("Other reports and their creator data will be kept.")
+    st.caption("Other reports, their creator data and all sponsorship records will be kept.")
     cancel, delete = st.columns(2)
     if cancel.button("Cancel", width="stretch"):
         st.rerun()
@@ -645,6 +652,8 @@ def creator_card(vm: dict, ctx: dict, shortlisted: bool) -> None:
     with st.container(key=f"card-cr-{ui.key(vm['id'])}"):
         badges = (ui.confidence_badge(vm["conf"], vm["conf_label"], basis=vm["basis"])
                   + (" " + ui.gem_badge() if vm["gem"] else "") + (" " + ui.budget_badge() if vm["over_budget"] else ""))
+        if (h := rel.history(vm["id"])).any:
+            badges += " " + ui.history_badge(h.sponsorships, h.positive, h.negative)
         loc = COUNTRY.get(vm["country"], vm["country"]) if vm["country"] else ""
         stats = "".join([
             ui.stat_tile("Subscribers", ui.fmt_count(vm["subs"])),
@@ -1117,18 +1126,30 @@ def analysis_page(ctx: dict, cid: str, short: list[str]) -> None:
                  f"{int(f.get('n_classified_comments', 0))} comments · transcripts "
                  f"{f.get('transcript_coverage', 0):.0%} · {int(f.get('n_visual_images', 0))} thumbnails")
     html(f'<div class="pn-subtle" style="margin:8px 2px 18px">{esc(conf_line)}</div>')
+    if (h := rel.history(cid)).any:  # actual Prenew experience, next to (never inside) the predicted score
+        with st.container(key="panel-relationship"):
+            html('<div class="pn-kicker">Prenew relationship</div><div class="pn-subtle" style="margin-bottom:6px">'
+                 'What happened when Prenew worked with this creator. Separate from the campaign score above.</div>'
+                 '<div class="pn-stats three">'
+                 + "".join(ui.stat_tile(a, b) for a, b in [
+                     ("Sponsorships", str(h.sponsorships)), ("Completed", str(h.completed)),
+                     ("In progress", str(h.in_progress)), ("Total spend", money(h.total_spend)),
+                     ("Total revenue", money(h.total_revenue)),
+                     ("Historical ROAS", "–" if h.roas is None else f"{h.roas:.1f}×")])
+                 + f'</div><div class="pn-subtle">Historical feedback: 👍 {h.positive} · 👎 {h.negative}</div>')
+        st.write("")
 
     # why
     why, summary = st.columns([1.1, 1], gap="large")
     with why:
         with st.container(key="panel-why"):
             rows = [(label, vm["bars"].get(label)) for label, _, _ in CARD_BARS + [EVIDENCE_BAR]]
-            rel = [("Performance vs. candidates", vm["groups"].get("Reach & Performance")),
+            vs_cands = [("Performance vs. candidates", vm["groups"].get("Reach & Performance")),
                    ("Cost & risk vs. candidates", vm["groups"].get("Cost & Risk"))]
             html('<div class="pn-kicker">Why this creator?</div>'
                  + "".join(ui.metric_bar(l, v, accent=(l == "Audience relevance")) for l, v in rows)
                  + '<div class="pn-divider"></div>'
-                 + "".join(ui.metric_bar(l, v) for l, v in rel))
+                 + "".join(ui.metric_bar(l, v) for l, v in vs_cands))
     with summary:
         with st.container(key="panel-sum"):
             html('<div class="pn-kicker">Assessment</div>'
@@ -1244,6 +1265,45 @@ def analysis_page(ctx: dict, cid: str, short: list[str]) -> None:
 
 
 # ------------------------------------------------------------------ shortlist page
+def money(v: float | None, cur: str = rel.CURRENCY) -> str:
+    if v is None:
+        return "–"
+    sym = rel.CURRENCY_SYMBOL.get(cur, cur + " ")
+    return f"{sym}{v:,.3f}" if 0 < v < 1 else f"{sym}{v:,.0f}"
+
+
+def relationship_line(h: "rel.History") -> str:
+    """Actual Prenew experience with a creator, shown next to (never merged into) the campaign score."""
+    parts = [f"Prenew history: {h.sponsorships} sponsorship{'s' if h.sponsorships != 1 else ''}",
+             f"👍 {h.positive} · 👎 {h.negative}"]
+    if h.roas is not None:
+        parts.append(f"historical ROAS {h.roas:.1f}×")
+    if h.total_spend is not None:
+        parts.append(f"{money(h.total_spend)} spent")
+    return esc(" · ".join(parts))
+
+
+def _ask_sponsorship(**request) -> None:
+    ss.confirm_sp = request  # the dialog stays open across reruns until confirmed, cancelled or dismissed
+
+
+@st.dialog("Start sponsorship?", on_dismiss=lambda: ss.pop("confirm_sp", None))
+def confirm_sponsorship(campaign_id: str, cid: str, name: str, platform: str, spec: CampaignSpec) -> None:
+    st.write(f"Start a sponsorship with **{name}** for “{spec.product}”?")
+    st.caption("It appears under Sponsorships as In progress. The creator stays on this shortlist.")
+    no, yes = st.columns(2)
+    if no.button("Cancel", key="sp_confirm_no", width="stretch"):
+        ss.pop("confirm_sp", None)
+        st.rerun()
+    if yes.button("Start sponsorship", key="sp_confirm_yes", type="primary", width="stretch"):
+        ss.pop("confirm_sp", None)
+        rel.start_sponsorship(campaign_id, cid, creator_name=name, platform=platform, country=spec.target_country,
+                              campaign_label=f"{spec.product} · {COUNTRY.get(spec.target_country, spec.target_country)}")
+        ss.toast = (f"Sponsorship with {name} started", ":material/handshake:")
+        ss.view = "sponsorships"
+        st.rerun()
+
+
 def shortlist_page(ctx: dict, short: list[str]) -> None:
     with band:
         spec = ctx["spec"]
@@ -1252,13 +1312,27 @@ def shortlist_page(ctx: dict, short: list[str]) -> None:
     if not short:
         ui.empty_state("Your shortlist is empty.", "Go back to the campaign and add creators with “+ Shortlist”.")
         return
+    camp = ctx["campaign"]["id"]
+    entries = rel.shortlist(camp)
+    view = st.segmented_control("Order", ["Your order", "Favorites first"], required=True,
+                                label_visibility="collapsed", **keep(f"sl_order_{camp}", "Your order"))
+    if view == "Favorites first":
+        entries = sorted(entries, key=lambda e: -(e["favorite"] or 0))  # stable: keeps the manual order within
+    sponsored = rel.active_for(camp)
+    if (req := ss.get("confirm_sp")) and req["campaign_id"] == camp:
+        confirm_sponsorship(**req, spec=ctx["spec"])
     rows = []
-    for cid in short:
+    for pos, entry in enumerate(entries):
+        cid, fav = entry["creator_id"], bool(entry["favorite"])
         vm = ctx["vms"].get(cid)
         pvm = next((P["vms"][cid] for P in ctx["platforms"].values() if cid in P["vms"]), None)
         name = vm["name"] if vm else ctx["creators"].get(cid, {}).get("name", cid)
         with st.container(key=f"card-sl-{ui.key(cid)}"):
-            a, b, c, d = st.columns([3.2, 1.2, 1.1, 1.1], vertical_alignment="center")
+            star, a, b, c, d = st.columns([0.45, 3.0, 1.2, 1.35, 0.9], vertical_alignment="center")
+            star.button("★" if fav else "☆", key=f"slfav_{cid}", type="tertiary",
+                        help="Favorite: your own marker, it never changes the score",
+                        on_click=rel.toggle_favorite, args=(camp, cid))
+            label = pvm["name"] if pvm else name  # display name, snapshotted into a sponsorship
             if cid.startswith(tts.PREFIX):  # human-selected TikTok lead: link + why, never a score
                 h = cid[len(tts.PREFIX):]
                 L = tts.lead(ctx["campaign"]["id"], h) or {}
@@ -1309,8 +1383,24 @@ def shortlist_page(ctx: dict, short: list[str]) -> None:
                              "channel_url": vm["url"], "reasons": "; ".join(vm["reasons"])})
             else:
                 a.markdown(f"**{esc(name)}** — no longer passes the hard filters for this campaign")
-            d.button("Remove", key=f"slr_{cid}", on_click=toggle_shortlist, args=(ctx["campaign"]["id"], cid),
-                     width="stretch")
+            plat = ("tiktok" if cid.startswith(tts.PREFIX) else pvm["platform"] if pvm else "youtube")
+            sp = sponsored.get(cid)
+            if sp and sp["status"] == "in_progress":
+                c.button("In sponsorship", key=f"slsp_{cid}", icon=":material/handshake:", width="stretch",
+                         on_click=go, args=("sponsorships",), help="Open the Sponsorships section")
+            else:
+                c.button("Start sponsorship" if not sp else "New sponsorship", key=f"slsp_{cid}",
+                         icon=":material/handshake:", width="stretch", on_click=_ask_sponsorship,
+                         kwargs=dict(campaign_id=camp, cid=cid, name=label, platform=plat))
+            with d, st.container(horizontal=True, gap="small", key=f"slord_{ui.key(cid)}"):
+                st.button("↑", key=f"slup_{cid}", help="Move up", disabled=view != "Your order" or pos == 0,
+                          on_click=rel.move, args=(camp, cid, -1))
+                st.button("↓", key=f"sldown_{cid}", help="Move down",
+                          disabled=view != "Your order" or pos == len(entries) - 1,
+                          on_click=rel.move, args=(camp, cid, 1))
+            d.button("Remove", key=f"slr_{cid}", type="tertiary", on_click=toggle_shortlist, args=(camp, cid))
+            if (h := rel.history(cid)).any:
+                html(f'<div class="pn-subtle" style="margin:4px 0 0 2px">{relationship_line(h)}</div>')
     st.write("")
     if rows:
         spec = ctx["spec"]
@@ -1340,6 +1430,108 @@ def shortlist_page(ctx: dict, short: list[str]) -> None:
          'this tool.</div>')
 
 
+# ------------------------------------------------------------------ sponsorships (what Prenew actually did)
+def _bound(key: str, value, on_change, *args) -> dict:
+    """Widget kwargs whose value always comes from the database (the source of truth), written back on change."""
+    ss[key] = value
+    return {"key": key, "on_change": lambda: on_change(*args, ss[key])}
+
+
+def _save_performance(sid: str) -> None:
+    k = f"spf_{sid}_"
+    try:
+        rel.update_performance(sid, ss.get(k + "price"), {kpi: ss.get(k + kpi) for kpi in rel.KPIS},
+                               ss.get(k + "notes", ""))
+        ss.toast = ("Performance saved", ":material/check:")
+    except ValueError as e:
+        ss.toast = (str(e), ":material/error:")
+
+
+def sponsorship_card(r: dict) -> None:
+    sid, k, d = r["id"], r["kpis"], r["derived"]
+    market = COUNTRY.get(r["country"], r["country"]) if r["country"] else ""
+    h = rel.history(r["creator_id"])
+    with st.container(key=f"card-sp-{sid}"):
+        html(f'<div class="pn-card-head"><div class="who"><div class="pn-rank">{ui.platform_icon(r["platform"], 13)} '
+             f'{esc(PLATFORMS.get(r["platform"], r["platform"]))}{" · " + esc(market) if market else ""}</div>'
+             f'<div class="name">{esc(r["creator_name"])}</div>'
+             f'<div class="meta">{esc(r["campaign_label"])} · started {esc(r["started_at"][:10])}'
+             f'{" · done " + esc(r["completed_at"][:10]) if r["completed_at"] else ""}</div></div></div>')
+        st.selectbox("Status", list(rel.STATUSES), format_func=rel.STATUSES.get,
+                     **_bound(f"sp_status_{sid}", r["status"], rel.set_status, sid))
+        roas = d.get("roas")
+        tiles = [("Price paid", money(r["price_paid"], r["currency"])), ("Views", ui.fmt_count(k.get("views"))),
+                 ("Referrals", ui.fmt_count(k.get("referrals"))), ("Conversions", ui.fmt_count(k.get("conversions"))),
+                 ("Revenue", money(k.get("revenue"), r["currency"])), ("ROAS", "–" if roas is None else f"{roas:.1f}×")]
+        html('<div class="pn-stats three">' + "".join(ui.stat_tile(a, b) for a, b in tiles) + "</div>")
+        st.segmented_control("Outcome", list(rel.OUTCOMES), format_func=rel.OUTCOMES.get, required=True,
+                             help="How this sponsorship went. One outcome per sponsorship; the creator's history "
+                                  "adds up all sponsorships.",
+                             **_bound(f"sp_outcome_{sid}", r["outcome"] or "neutral", rel.set_outcome, sid))
+        html(f'<div class="pn-subtle">History with this creator: 👍 {h.positive} · 👎 {h.negative} · '
+             f'{h.sponsorships} sponsorship{"s" if h.sponsorships != 1 else ""}</div>')
+        with st.popover("Edit performance", icon=":material/edit:", width="stretch"):
+            with st.form(f"spf_form_{sid}", border=False):
+                f = f"spf_{sid}_"
+                st.number_input(f"Price paid ({rel.CURRENCY_SYMBOL.get(r['currency'], r['currency'])})", min_value=0.0,
+                                value=r["price_paid"], step=100.0, format="%.2f", key=f + "price",
+                                placeholder="not recorded")
+                cols = st.columns(2)
+                for i, (kpi, label) in enumerate(rel.KPIS.items()):
+                    cols[i % 2].number_input(label + (f" ({rel.CURRENCY_SYMBOL.get(r['currency'], '')})"
+                                                      if kpi in rel.MONEY_KPIS else ""),
+                                             min_value=0.0, value=k.get(kpi), step=1.0, key=f + kpi,
+                                             format="%.2f" if kpi in rel.MONEY_KPIS else "%.0f",
+                                             placeholder="not recorded")
+                st.text_area("Notes", r["notes"] or "", key=f + "notes", height=70)
+                st.form_submit_button("Save", type="primary", width="stretch", on_click=_save_performance,
+                                      args=(sid,))
+        if d:
+            with st.expander("All metrics"):
+                for name, (label, _, _) in rel.DERIVED.items():
+                    if name in d:
+                        v = d[name]
+                        html(f'<div class="pn-kv"><span class="k">{label}</span><span class="v">'
+                             f'{f"{v:.1f}×" if name == "roas" else money(v, r["currency"])}</span></div>')
+                if r["notes"]:
+                    html(f'<div class="pn-note" style="margin-top:8px">{esc(r["notes"])}</div>')
+
+
+def sponsorships_page() -> None:
+    with band:
+        band_title("Sponsorships", "", "Creators Prenew decided to work with, and what they delivered.")
+    rows = rel.sponsorships()
+    if not rows:
+        ui.empty_state("No sponsorships yet.", "Start one from a campaign shortlist with “Start sponsorship”.")
+        return
+    tot = rel.summary(rows)
+    for col, (label, value) in zip(st.columns(4), [
+            ("Active sponsorships", tot["active"]), ("Completed sponsorships", tot["completed"]),
+            ("Total sponsorship spend", money(tot["spend"])), ("Total tracked revenue", money(tot["revenue"]))]):
+        col.metric(label, value, border=True)
+    f1, f2, f3, f4 = st.columns([1.6, 1.2, 1.2, 1.8], vertical_alignment="bottom")
+    status = f1.segmented_control("Status", ["all", *rel.STATUSES], required=True, label_visibility="collapsed",
+                                  format_func=lambda s_: "All" if s_ == "all" else rel.STATUSES[s_],
+                                  **keep("sp_f_status", "all"))
+    markets = sorted({r["country"] for r in rows if r["country"]})
+    market = f2.selectbox("Market", ["all", *markets], format_func=lambda m: "All markets" if m == "all"
+                          else COUNTRY.get(m, m), **keep("sp_f_market", "all"))
+    plats = [p for p in PLATFORMS if any(r["platform"] == p for r in rows)]  # only platforms with real records
+    plat = f3.selectbox("Platform", ["all", *plats], format_func=lambda p: "All platforms" if p == "all"
+                        else PLATFORMS[p], **keep("sp_f_platform", "all"))
+    query = f4.text_input("Search creators", placeholder="Search creators", **keep("sp_f_query", ""))
+    shown = [r for r in rows if (status == "all" or r["status"] == status)
+             and (market == "all" or r["country"] == market) and (plat == "all" or r["platform"] == plat)
+             and (not query or query.lower() in (r["creator_name"] or "").lower())]
+    st.write("")
+    if not shown:
+        ui.empty_state("No sponsorships match these filters.", "Clear a filter to see more.")
+    for i in range(0, len(shown), 2):
+        for col, r in zip(st.columns(2, gap="medium"), shown[i:i + 2]):
+            with col:
+                sponsorship_card(r)
+
+
 # ------------------------------------------------------------------ router
 open_db()
 campaigns = list_campaigns()
@@ -1354,7 +1546,9 @@ band = st.container(key="band")  # deep-green top band: nav + the page's title; 
 with band:
     top_nav(len(short), current)
 
-if ss.view == "campaign" or current is None:
+if ss.view == "sponsorships":
+    sponsorships_page()
+elif ss.view == "campaign" or current is None:
     campaign_page(campaigns)
 else:
     ctx = build_context(current)

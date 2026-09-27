@@ -179,7 +179,8 @@ def add_manual(campaign_id: str, url: str, name: str | None = None) -> TikTokRef
     db.execute("INSERT OR REPLACE INTO tiktok_leads VALUES (?,?,?,?,?,?,?,?,?,?)",
                (campaign_id, ref.handle, ref.url, (name or "").strip()[:80] or None, "Added by you", ref.url, 0,
                 "manual", "suggested", db.now()))
-    db.execute("INSERT OR IGNORE INTO shortlist VALUES (?,?,?)", (campaign_id, PREFIX + ref.handle, db.now()))
+    import relationships  # the one shortlist (order / favorites) shared with every platform
+    relationships.add_to_shortlist(campaign_id, PREFIX + ref.handle)
     return ref
 
 
