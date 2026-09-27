@@ -95,6 +95,21 @@ marketer already knows can be added by pasting their profile link.
 - `ScoutProvider` is the seam for a future official, TikTok-approved integration; oEmbed stays disabled until
   Prenew confirms the commercial use is permitted.
 
+## Home and global sections
+
+Home is an operational dashboard, not a landing page: **New creator search** (the 3-step brief → confirm → discover
+flow), live **Shortlists** and **Sponsorships** cards (counts from the database; empty states when there is none)
+and **Recent searches** with work state per search (found · shortlisted · sponsored). Shortlists and Sponsorships
+are global sections in the header on every page:
+
+- **Shortlists**: the existing `shortlist` table grouped by `campaign_id` ("By search"), or every entry in one table
+  ("All creators": a creator shortlisted in two searches appears twice, each with that search's own score).
+  "Open shortlist" enters the existing per-search shortlist (order, ★, Start sponsorship unchanged).
+- **Sponsorships**: grouped by the search they came from (kept, labelled "report deleted", if the report was
+  deleted); filters for search, status, market, platform and name combine and keep the grouping.
+- Creators keep one canonical record (`creators`); scores stay per search (`rankings`); favorites are per
+  creator × search (`shortlist.favorite`); sponsorships are separate records linked to both.
+
 ## Shortlist management and sponsorship tracking
 
 `relationships.py` (business logic) + the **Shortlist** and **Sponsorships** sections:

@@ -16,7 +16,7 @@ ACCOUNTS = {
 }
 
 
-def fake_get(path, params):
+def fake_get(path, params, **kwargs):
     if path == "me/accounts":
         return {"data": [{"name": "Page", "instagram_business_account": {"id": "1784"}}]}
     assert path == "1784"
@@ -42,6 +42,10 @@ def test_profile_metrics(fake):
     assert p["median_likes"] == 300  # the hidden-likes post is not counted as 0 likes
     assert p["engagement_rate"] == pytest.approx((420 + 210) / 2 / 10_000)
     assert p["posts_last_30d"] == 2
+
+
+def test_professional_account_is_discovered_from_page_link(fake):
+    assert instagram.my_ig_id() == "1784"
 
 
 def test_personal_accounts_are_skipped_and_token_errors_stop(fake):

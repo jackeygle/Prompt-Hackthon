@@ -98,6 +98,38 @@ def toggle_favorite(campaign_id: str, creator_id: str) -> bool:
     return bool(rows and rows[0]["favorite"])
 
 
+PLATFORM_PREFIX = {"yt": "youtube", "twitch": "twitch", "instagram": "instagram", "tiktok": "tiktok"}
+
+
+def platform_of(creator_id: str) -> str:
+    """Canonical creator IDs carry their platform ('yt:…', 'twitch:…', 'instagram:…', 'tiktok:<handle>')."""
+    return PLATFORM_PREFIX.get(creator_id.split(":", 1)[0], "youtube")
+
+
+def shortlist_groups() -> dict[str, dict]:
+    """Global Shortlists = the existing shortlist table grouped by the search (campaign) that produced it."""
+    groups: dict[str, dict] = {}
+    for r in db.query("SELECT campaign_id, creator_id, favorite FROM shortlist ORDER BY campaign_id, position, added_at"):
+        g = groups.setdefault(r["campaign_id"], {"n": 0, "favorites": 0, "platforms": [], "creators": []})
+        g["n"] += 1
+        g["favorites"] += int(r["favorite"] or 0)
+        g["creators"].append(r["creator_id"])
+        if (p := platform_of(r["creator_id"])) not in g["platforms"]:
+            g["platforms"].append(p)
+    return groups
+
+
+def sponsorship_groups(rows: list[dict]) -> dict[str, dict]:
+    """Sponsorships grouped by the campaign they came from (kept even if that report was deleted)."""
+    groups: dict[str, dict] = {}
+    for r in rows:
+        g = groups.setdefault(r["campaign_id"], {"label": r["campaign_label"], "rows": []})
+        g["rows"].append(r)
+    for g in groups.values():
+        g.update(summary(g["rows"]))
+    return groups
+
+
 # ------------------------------------------------------------------ sponsorships
 def start_sponsorship(campaign_id: str, creator_id: str, *, creator_name: str, platform: str, country: str | None,
                       campaign_label: str, currency: str = CURRENCY) -> str:
