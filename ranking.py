@@ -48,28 +48,70 @@ CRITERIA = [
     Criterion("spam_ratio", "Cost & Risk", "C", 0.25, "Spam / suspicious comments"),
     Criterion("days_since_last_relevant", "Cost & Risk", "C", 0.25, "Days since last relevant upload"),
 ]
-CRITERION_BY_NAME = {c.name: c for c in CRITERIA}
+# Twitch / Instagram: own criteria from the official APIs + one LLM fit judgement on their own text (bio, stream
+# titles, captions). Same 5 AHP groups, so the campaign goal and manual weights apply to every platform.
+TWITCH_CRITERIA = [
+    Criterion("tw_audience_relevance", "Campaign Fit", "B", 1.0, "Target-audience relevance (stream titles, LLM)"),
+    Criterion("tw_vod_view_ratio", "Audience Quality", "B", 1.0, "VOD views / followers"),
+    Criterion("tw_log_followers", "Reach & Performance", "B", 0.4, "Followers (log)"),
+    Criterion("tw_log_median_vod_views", "Reach & Performance", "B", 0.4, "Median VOD views (log)"),
+    Criterion("tw_streams_30d", "Reach & Performance", "B", 0.2, "Streams in the last 30 days"),
+    Criterion("tw_days_since_last_stream", "Cost & Risk", "C", 1.0, "Days since last stream"),
+]
+INSTAGRAM_CRITERIA = [
+    Criterion("ig_audience_relevance", "Campaign Fit", "B", 0.75, "Target-audience relevance (captions, LLM)"),
+    Criterion("ig_target_lang", "Campaign Fit", "B", 0.25, "Captions in the target language"),
+    Criterion("ig_engagement_rate", "Audience Quality", "B", 0.7, "Engagement rate"),
+    Criterion("ig_comment_like_ratio", "Audience Quality", "B", 0.3, "Comments per like (conversation)"),
+    Criterion("ig_log_followers", "Reach & Performance", "B", 0.5, "Followers (log)"),
+    Criterion("ig_log_median_likes", "Reach & Performance", "B", 0.3, "Median likes (log)"),
+    Criterion("ig_posts_30d", "Reach & Performance", "B", 0.2, "Posts in the last 30 days"),
+    Criterion("ig_days_since_last_post", "Cost & Risk", "C", 1.0, "Days since last post"),
+]
+PLATFORM_CRITERIA = {"youtube": CRITERIA, "twitch": TWITCH_CRITERIA, "instagram": INSTAGRAM_CRITERIA}
+CRITERION_BY_NAME = {c.name: c for crits in PLATFORM_CRITERIA.values() for c in crits}
 
 # ------------------------------------------------------------------ AHP
 RI = {1: 0.0, 2: 0.0, 3: 0.58, 4: 0.90, 5: 1.12, 6: 1.24, 7: 1.32, 8: 1.41, 9: 1.45}
 
-# Pairwise matrices over GROUPS (row vs column), Saaty 1-9 scale.
+# Campaign priority (UI: "Drive sales" / "Reach more gamers" / "Balanced") = one pairwise matrix over GROUPS
+# (row vs column, Saaty 1-9 scale) plus a few sub-weight shifts inside groups. One ranking system, re-weighted.
+# Campaign Fit stays heavy in every priority, so relevance is always required.
 AHP_PRESETS = {
-    "conversion": [[1, 2, 2, 4, 3],
+    # Drive sales: fit, purchase intent / community and product credibility first; reach matters least
+    "conversion": [[1, 2, 1, 4, 3],
                    [1/2, 1, 1, 3, 2],
-                   [1/2, 1, 1, 3, 2],
+                   [1, 1, 1, 3, 2],
                    [1/4, 1/3, 1/3, 1, 1/2],
                    [1/3, 1/2, 1/2, 2, 1]],
-    "awareness": [[1, 2, 2, 1/2, 2],
-                  [1/2, 1, 1, 1/3, 1],
-                  [1/2, 1, 1, 1/3, 1],
-                  [2, 3, 3, 1, 3],
-                  [1/2, 1, 1, 1/3, 1]],
-    "balanced": [[1, 1, 1, 2, 2],
-                 [1, 1, 1, 2, 2],
-                 [1, 1, 1, 2, 2],
-                 [1/2, 1/2, 1/2, 1, 1],
-                 [1/2, 1/2, 1/2, 1, 1]],
+    # Reach more gamers: relevant reach first, audience fit a strong second
+    "awareness": [[1, 3, 3, 1/2, 3],
+                  [1/3, 1, 1, 1/6, 1],
+                  [1/3, 1, 1, 1/6, 1],
+                  [2, 6, 6, 1, 6],
+                  [1/3, 1, 1, 1/6, 1]],
+    # Balanced: fit and relevant reach equal; sales signals and cost in between
+    "balanced": [[1, 2, 2, 1, 2],
+                 [1/2, 1, 1, 1/2, 1],
+                 [1/2, 1, 1, 1/2, 1],
+                 [1, 2, 2, 1, 2],
+                 [1/2, 1, 1, 1/2, 1]],
+}
+# Sub-weight shifts per priority (replace Criterion.sub_weight; renormalised within the group).
+PRIORITY_SUB_WEIGHTS = {
+    "conversion": {"purchase_intent_ratio": 0.45, "meaningful_ratio": 0.25, "technical_question_ratio": 0.20,
+                   "creator_reply_rate": 0.10},
+    "awareness": {
+        # fit = does the audience match (not: is the content about the product)
+        "audience_relevance": 0.45, "niche_relevance": 0.25, "product_relevance": 0.05,
+        "price_segment_relevance": 0.05, "target_lang_share": 0.20,
+        # reach = relevant views, not efficiency ratios that favour small channels
+        "log_median_views": 0.80, "engagement_rate": 0.10, "view_efficiency": 0.05, "view_cv": 0.05,
+        # the cost proxy grows with views; don't let it cancel the reach priority
+        "log_est_cost_eur": 0.20, "spam_ratio": 0.40, "days_since_last_relevant": 0.40,
+        "tw_log_followers": 0.45, "tw_log_median_vod_views": 0.45, "tw_streams_30d": 0.10,
+        "ig_log_followers": 0.60, "ig_log_median_likes": 0.30, "ig_posts_30d": 0.10},
+    "balanced": {},
 }
 
 
@@ -87,14 +129,18 @@ def ahp_weights(matrix) -> tuple[np.ndarray, float]:
     return w, cr
 
 
-def criterion_weights(group_weights: dict[str, float]) -> dict[str, float]:
-    """Final weight = group weight (AHP) x sub-weight (normalised within the group)."""
+def criterion_weights(group_weights: dict[str, float], criteria=None, preset: str | None = None) -> dict[str, float]:
+    """Final weight = group weight (AHP) x sub-weight (normalised within the group); the campaign priority (`preset`)
+    may shift sub-weights. Groups without criteria on a platform (e.g. Content Credibility on Twitch) drop out."""
+    criteria = CRITERIA if criteria is None else criteria
+    shift = PRIORITY_SUB_WEIGHTS.get(preset or "", {})
     out = {}
     for g in GROUPS:
-        members = [c for c in CRITERIA if c.group == g]
-        total = sum(c.sub_weight for c in members)
+        members = [c for c in criteria if c.group == g]
+        sub = {c.name: shift.get(c.name, c.sub_weight) for c in members}
+        total = sum(sub.values())
         for c in members:
-            out[c.name] = group_weights.get(g, 0.0) * c.sub_weight / total
+            out[c.name] = group_weights.get(g, 0.0) * sub[c.name] / total
     s = sum(out.values()) or 1.0
     return {k: v / s for k, v in out.items()}
 
@@ -118,6 +164,39 @@ def hard_filter(f: dict) -> tuple[bool, str]:
     return (not reasons, "; ".join(reasons))
 
 
+MAX_DAYS_INACTIVE = 60  # Twitch / Instagram: last stream / post
+
+
+def platform_hard_filter(platform: str, f: dict) -> tuple[bool, str]:
+    reasons = []
+    p = {"twitch": "tw", "instagram": "ig"}[platform]
+    days = f.get(f"{p}_days_since_last_stream" if p == "tw" else f"{p}_days_since_last_post")
+    if days is None or days > MAX_DAYS_INACTIVE:
+        reasons.append(f"no {'stream' if p == 'tw' else 'post'} in the last {MAX_DAYS_INACTIVE} days")
+    rel = f.get(f"{p}_audience_relevance")
+    if rel is None:
+        reasons.append("content analysis failed")
+    elif rel < config.MIN_NICHE_RELEVANCE:
+        reasons.append("audience relevance too low")
+    if p == "ig" and (f.get("ig_n_posts") or 0) < 3:
+        reasons.append("fewer than 3 recent posts visible")
+    return (not reasons, "; ".join(reasons))
+
+
+def platform_confidence(platform: str, f: dict) -> float:
+    """Official-API numbers (reliable) but no comment analysis: capped below YouTube's maximum."""
+    p = {"twitch": "tw", "instagram": "ig"}[platform]
+    n = f.get("tw_n_vods" if p == "tw" else "ig_n_posts") or 0
+    days = f.get(f"{p}_days_since_last_stream" if p == "tw" else f"{p}_days_since_last_post")
+    recency = math.exp(-days / 90) if days is not None else 0.0
+    c = (0.30 * 1.0                                    # official API source
+         + 0.25 * min(n / 10, 1)                       # items behind the numbers
+         + 0.20 * (f.get(f"{p}_fit_evidence") or 0.0)  # verified evidence quote for the fit judgement
+         + 0.15 * recency
+         + 0.10 * (f.get(f"{p}_followers") is not None))
+    return round(float(min(max(c, 0.0), 0.9)), 3)
+
+
 # ------------------------------------------------------------------ TOPSIS
 def _prepare(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Winsorise at 5/95th percentile; impute missing with the 25th percentile (conservative)."""
@@ -138,9 +217,9 @@ def _prepare(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
     return X, imputed
 
 
-def topsis(df: pd.DataFrame, weights: dict[str, float]) -> pd.DataFrame:
+def topsis(df: pd.DataFrame, weights: dict[str, float], criteria=None) -> pd.DataFrame:
     """df: rows = creators, columns = criteria names. Returns score, rank, and per-criterion closeness."""
-    present = [c.name for c in CRITERIA if c.name in df.columns]
+    present = [c.name for c in (CRITERIA if criteria is None else criteria) if c.name in df.columns]
     coverage = df[present].notna().mean() if len(df) else pd.Series(0.0, index=present)
     # criteria known for too few candidates would be mostly imputed -> excluded, and reported
     dropped = [c for c in present if coverage[c] < config.MIN_CRITERION_COVERAGE]

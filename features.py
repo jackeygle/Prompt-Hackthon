@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 
 import config
 from llm import LLMClient
-from models import CampaignSpec, CommentBatch, ContentFeatures, RelevantVideos
+from models import CampaignSpec, CommentBatch, ContentFeatures, PlatformFitBatch, RelevantVideos
 
 CONTENT_FEATURES = ["niche_relevance", "audience_relevance", "product_relevance", "price_segment_relevance", "first_hand_experience",
                     "benchmark_discussion", "price_discussion", "product_comparison", "purchase_recommendation"]
@@ -166,4 +166,80 @@ def comment_features(comments: list[dict], threads: int, creator_replied_threads
     f["spam_ratio"] = cnt["spam"] / n
     langs = [c["language"] for c in labeled if c.get("language")]
     f["target_lang_share"] = (sum(l == target_lang for l in langs) / len(langs)) if langs else None
+    return f
+
+
+# ---------------------------------------------------------------- Twitch / Instagram
+PLATFORM_FIT_SYSTEM = """You judge creators on {platform} for an influencer-marketing campaign.
+For each profile, from its own text only (bio, category, recent stream titles or post captions), score how strongly
+its content attracts the campaign's TARGET AUDIENCE, including the broader topics that audience watches (audience
+interests), not only the product. Be conservative. Evidence quotes must be copied exactly from that profile's text.
+Do not compare or rank the profiles."""
+
+
+def _profile_text(platform: str, p: dict) -> str:
+    if platform == "twitch":
+        return "\n".join([f"Name: {p['name']}", f"Main category: {p.get('game') or '-'}",
+                          f"Bio: {p.get('description') or '-'}", "Recent streams:",
+                          *[f"- {t}" for t in (p.get("vod_titles") or [])[:10]]])
+    return "\n".join([f"Name: {p.get('name') or p['username']}", f"Bio: {p.get('biography') or '-'}",
+                      "Recent captions:", *[f"- {c}" for c in (p.get("captions") or [])[:8] if c]])
+
+
+def platform_fit(llm: LLMClient, spec: CampaignSpec, platform: str, profiles: dict[str, dict],
+                 batch: int = 6) -> dict[str, dict]:
+    """key -> {audience_relevance, content_language, summary, evidence:[{quote, verified}]}. Failed batches are absent."""
+    keys, out = list(profiles), {}
+    head = (f"Campaign product: {spec.product}\nNiche: {spec.niche}\nTarget audience: {spec.audience}\n"
+            f"Audience interests: {', '.join(spec.audience_interests) or spec.niche}\n"
+            f"Target language: {spec.target_language}\n\nPROFILES:\n")
+    for s in range(0, len(keys), batch):
+        chunk = keys[s:s + batch]
+        texts = [_profile_text(platform, profiles[k]) for k in chunk]
+        user = head + "\n\n".join(f"[{j}]\n{t}" for j, t in enumerate(texts))
+        try:
+            res = llm.extract(PlatformFitBatch, PLATFORM_FIT_SYSTEM.format(platform=platform.capitalize()), user)
+        except Exception:
+            continue
+        for it in res.items:
+            if 0 <= it.i < len(chunk):
+                src = _norm(texts[it.i])
+                out[chunk[it.i]] = {
+                    "audience_relevance": it.audience_relevance, "content_language": it.content_language.lower()[:2],
+                    "summary": it.summary,
+                    "evidence": [{"quote": q, "verified": bool(_norm(q)) and _norm(q) in src} for q in it.evidence[:2]]}
+    return out
+
+
+def platform_features(platform: str, p: dict, fit: dict | None, target_lang: str) -> dict:
+    """Numbers from the official API + the fit judgement -> ranking features (prefixed tw_ / ig_)."""
+    f: dict = {}
+    if platform == "twitch":
+        f["tw_followers"] = p.get("followers")
+        f["tw_log_followers"] = math.log10(1 + p["followers"]) if p.get("followers") is not None else None
+        med = p.get("median_vod_views")
+        f["tw_median_vod_views"] = med
+        f["tw_log_median_vod_views"] = math.log10(1 + med) if med is not None else None
+        f["tw_vod_view_ratio"] = med / p["followers"] if med is not None and p.get("followers") else None
+        f["tw_streams_30d"] = p.get("streams_30d")
+        f["tw_n_vods"] = p.get("n_vods")
+        f["tw_days_since_last_stream"] = _days_since(p["last_stream_at"]) if p.get("last_stream_at") else None
+    else:
+        f["ig_followers"] = p.get("followers")
+        f["ig_log_followers"] = math.log10(1 + p["followers"]) if p.get("followers") is not None else None
+        f["ig_engagement_rate"] = p.get("engagement_rate")
+        f["ig_median_likes"] = p.get("median_likes")
+        f["ig_log_median_likes"] = math.log10(1 + p["median_likes"]) if p.get("median_likes") is not None else None
+        f["ig_comment_like_ratio"] = (p["median_comments"] / p["median_likes"]
+                                      if p.get("median_likes") and p.get("median_comments") is not None else None)
+        f["ig_posts_30d"] = p.get("posts_last_30d")
+        f["ig_n_posts"] = p.get("n_posts")
+        last = p.get("last_post_at")
+        f["ig_days_since_last_post"] = _days_since(last.replace("+0000", "+00:00")) if last else None
+    pre = "tw" if platform == "twitch" else "ig"
+    if fit:
+        f[f"{pre}_audience_relevance"] = fit["audience_relevance"]
+        f[f"{pre}_fit_evidence"] = float(any(e["verified"] for e in fit["evidence"]))
+        if platform == "instagram":
+            f["ig_target_lang"] = float(fit["content_language"] == target_lang)
     return f

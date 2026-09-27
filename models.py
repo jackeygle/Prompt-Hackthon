@@ -5,6 +5,35 @@ from pydantic import BaseModel, Field
 
 
 # ---------- Campaign ----------
+class CurrentTopic(BaseModel):
+    """A concrete, currently relevant thing the target audience follows (found via web search when available)."""
+    name: str = Field(description="Specific name as people search for it, e.g. an actual game title, product "
+                                  "model, event, community or recurring question; never a generic category")
+    kind: Literal["game", "hardware", "product", "technology", "community", "event", "question", "topic"]
+    why: str = Field(default="", description="<= 15 words: why this audience cares about it right now")
+
+
+class ResearchQueries(BaseModel):
+    queries: list[str] = Field(description=(
+        "Web searches that reveal what the target audience in the market plays, watches, uses, buys and asks about "
+        "right now (charts, most played / most watched, current releases, current products, current debates)"))
+
+
+class TopicResearch(BaseModel):
+    topics: list[CurrentTopic]
+
+
+class SearchPlan(BaseModel):
+    """Audience -> current topic -> content -> creator. Content searches dominate; creator/list searches are secondary."""
+    content_queries: list[str] = Field(description=(
+        "Searches a real viewer from the target audience would type to find VIDEOS about the concrete current topics "
+        "(the channels behind those videos are the creators we want)"))
+    creator_queries: list[str] = Field(description="A few direct creator searches (best / top creators, lists)")
+    web_queries: list[str] = Field(description=(
+        "Web searches to find creators and their profiles on other platforms: mostly topic-driven, one or two "
+        "editorial creator lists, plus one each starting with 'site:tiktok.com', 'site:instagram.com', 'site:twitch.tv'"))
+
+
 class CampaignSpecDraft(BaseModel):
     """What the LLM extracts from the brief. The user reviews/edits it before the run starts."""
     product: str = Field(description="What is being promoted, e.g. 'refurbished gaming PCs'")
@@ -19,7 +48,9 @@ class CampaignSpecDraft(BaseModel):
         "5-8 content topics this target audience already watches, broader than the product itself "
         "(e.g. for gaming PCs: PC gaming, competitive gaming, game performance/FPS, GPUs & hardware, "
         "gaming setups, tech reviews, budget gaming)"))
-    goal: Literal["conversion", "awareness", "balanced"] = Field(description="Main campaign goal")
+    goal: Literal["conversion", "awareness", "balanced"] = Field(default="balanced", description=(
+        "Campaign priority. 'balanced' unless the brief explicitly says the campaign is mainly about sales / "
+        "conversions ('conversion') or mainly about reach / awareness ('awareness')"))
     search_queries: list[str] = Field(description="6 diverse YouTube search queries, mostly in the target language")
     min_subscribers: int | None = Field(default=None, description="Minimum creator subscribers ONLY if explicitly "
                                         "stated in the brief (e.g. 'at least 10k' -> 10000), else null")
@@ -38,7 +69,10 @@ class CampaignSpec(CampaignSpecDraft):
     min_subscribers: int = 2_000
     max_subscribers: int = 3_000_000
     n_creators: int = 10            # creators analysed in depth (set by the user, drives API cost)
-    budget_per_video: int = 0       # max cost proxy per video in €, 0 = no limit (UI flag only, never changes the score)
+    budget_per_video: int = 0       # max cost proxy per video in €, 0 = no limit (flags, orders and gates top picks; never the score)
+    creator_queries: list[str] = Field(default_factory=list)       # secondary, direct "top creator" YouTube searches
+    current_topics: list[CurrentTopic] = Field(default_factory=list)  # what the audience follows now (search strategy)
+    topics_source: str = ""         # "web search" | "model knowledge" (no web provider or it failed)
     field_sources: dict[str, str] = Field(default_factory=dict)
 
 
@@ -53,6 +87,20 @@ class WebCreatorMention(BaseModel):
 
 class WebCreatorMentions(BaseModel):
     creators: list[WebCreatorMention]
+
+
+class WebSearchCreator(BaseModel):
+    """A creator nominated by ChatGPT web search (verified later against official APIs)."""
+    name: str
+    platform: str = "unknown"
+    handle: str | None = None
+    profile_url: str | None = None
+    source_url: str | None = None
+    evidence: str | None = None
+
+
+class WebSearchCreators(BaseModel):
+    creators: list[WebSearchCreator] = []
 
 
 # ---------- Visual analysis (VLM) ----------
@@ -115,3 +163,18 @@ class CommentLabelItem(BaseModel):
 
 class CommentBatch(BaseModel):
     items: list[CommentLabelItem]
+
+
+# ---------- Twitch / Instagram fit (one judgement per profile, from its own text only)
+class PlatformFitItem(BaseModel):
+    i: int = Field(description="Index of the profile in the input list")
+    audience_relevance: int = Field(ge=0, le=3, description=(
+        "How strongly this creator's content attracts the campaign's TARGET AUDIENCE (see audience interests): "
+        "0 none, 1 weak/occasional, 2 clearly, 3 central"))
+    content_language: str = Field(description="ISO 639-1 code of the language most of the given text is written in")
+    summary: str = Field(description="One sentence on why this creator does or does not reach the target audience")
+    evidence: list[str] = Field(description="Up to 2 short verbatim quotes (<= 15 words) copied from the profile text")
+
+
+class PlatformFitBatch(BaseModel):
+    items: list[PlatformFitItem]
