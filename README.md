@@ -1,5 +1,13 @@
 # Creator Intelligence Engine (hackathon MVP)
 
+## Demo
+
+[![Prenew Creator Intelligence walkthrough](docs/demo.gif)](docs/demo.mp4)
+
+*Home → Shortlists (by search / all creators) → a search's shortlist → Sponsorships grouped by search → search
+results → creator analysis → starting a new creator search. 2× speed; click for the full video
+([docs/demo.mp4](docs/demo.mp4), 1 min).*
+
 Campaign brief → gpt-5.6-sol extraction → **current-topic web research** → search strategy (audience → current topics →
 content → creator) → **human review/edit** → YouTube + gpt-5.6-sol web search + Twitch discovery →
 identity merge → YouTube data collection → text / comment / thumbnail (VLM) features → hard filter →
